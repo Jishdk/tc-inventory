@@ -70,11 +70,14 @@ trial, niet meer gebruikt.)
 
 ## Fase-status (10-08-2026)
 
-- 🚨 **Supabase-project staat gepauzeerd** (pooler: `tenant/user postgres.<ref> not found`,
-  `<ref>.supabase.co` resolvet niet). Hervatten in het dashboard, daarna de pooler-string
-  opnieuw kopiëren naar `.env` — de regio/host kan na een restore veranderen.
-- ✅ `beurs_app.py` + `tests/test_beurs_app.py` gebouwd (zie hierboven); alle checks groen
-  tegen het SQLite-schaduwschema, nog niet tegen Supabase zelf.
+- ✅ `beurs_app.py` + `tests/test_beurs_app.py` gebouwd; 45 checks groen tegen het
+  SQLite-schaduwschema én end-to-end getest tegen Supabase (~0,4 s per invoer).
+  Testregels weer verwijderd; `transactions` staat weer op 130.
+- ✅ Event `Cardmaniacs Nijmegen 15-16 augustus 2026` bestaat (id 3, 15-08, Nijmegen).
+- ⏳ Deploy naar Streamlit Community Cloud (repo staat klaar; secrets `SUPABASE_DB_URL`
+  + `TC_BEURS_PIN` in de Cloud-UI zetten).
+- Was het project gepauzeerd (pooler: `tenant/user ... not found`)? Zie `../CLAUDE.md`
+  noot bij de DB — hervatten in het Supabase-dashboard lost het op.
 
 ## Fase-status (30-07-2026)
 
@@ -93,7 +96,10 @@ trial, niet meer gebruikt.)
 
 ## Let op
 
-- Geen git repo. Oude bestanden 1e matching-poging in `../_archief/`.
+- Git: **privé** repo github.com/Jishdk/tc-inventory (sinds 10-08-2026, voor de
+  Streamlit-Cloud-deploy van `beurs_app.py`). `data/`, `*.xlsx`, `*.csv` en `.env` staan
+  in `.gitignore` — code wel in git, bedrijfsdata blijft lokaal.
+  Oude bestanden 1e matching-poging in `../_archief/`.
 - Secrets alleen in `.env` (RapidAPI + Supabase), nooit committen.
 - `data/_inkoop_v2` / `_sales_v2` zijn uitgepakte media (niet in git); `transactions.media_file`
   wijst ernaar. Opnieuw uitpakken uit de zips kan altijd.
