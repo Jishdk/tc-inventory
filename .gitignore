@@ -11,3 +11,6 @@ data/
 # python
 __pycache__/
 *.pyc
+
+# lokale screenshots
+screenshots/

@@ -102,11 +102,11 @@ def main():
     at.run()
     check(not at.exception, "app start zonder exception")
 
-    # --- wie ben je -------------------------------------------------------
-    check(any(b.label == "Kevin" for b in at.button), "naamkeuze toont teamleden")
-    at.button(key="wie_Kevin").click().run()
-    check(at.session_state["wie"] == "Kevin", "naam onthouden in sessie")
-    check(not at.exception, "geen exception na naamkeuze")
+    # --- geen naamkeuze meer: meteen invoeren -----------------------------
+    check("wie" not in at.session_state, "geen 'wie'-sessiestatus meer")
+    check(not [b for b in at.button if b.key and b.key.startswith("wie_")],
+          "geen naamkeuze-knoppen meer")
+    check(bool(at.text_input(key="zoekterm")), "zoekbalk staat er direct bij het openen")
 
     # --- event aangemaakt -------------------------------------------------
     with engine.connect() as c:
@@ -156,7 +156,7 @@ def main():
         t = r[0]
         check(t["kanaal"] == "verkoop" and t["type"] == "verkoop", "kanaal/type = verkoop")
         check(float(t["bedrag"]) == 430.0, "overschreven bedrag opgeslagen")
-        check(t["afzender"] == "Kevin", "afzender automatisch meegegeven")
+        check(t["afzender"] == "TC", "afzender vast op 'TC'")
         check(t["item_id"] is not None, "item_id gekoppeld")
         check(t["ruwe_tekst"] == "Umbreon VMAX (Alternate Art)", "ruwe_tekst = officiële naam")
         check(t["event_id"] == ev[0][0], "gekoppeld aan het beurs-event")
@@ -165,8 +165,10 @@ def main():
     # --- reset + bevestiging ---------------------------------------------
     check(at.session_state["sel"] is None, "formulier gereset na vastleggen")
     check(at.session_state["bedrag"] == 0.0, "bedrag gereset")
-    check(any("Kevin" in s.value and "430" in s.value for s in at.success),
-          f"bevestiging getoond: {[s.value for s in at.success]}")
+    bev = at.session_state["bevestiging"]
+    check(bev == "✓ Umbreon VMAX (Alternate Art) — €430.00", f"korte bevestiging: {bev}")
+    check(any("tc-ok" in m.value and bev in m.value for m in at.markdown),
+          "bevestiging staat als vervagend blok op het scherm")
 
     # --- tweede invoer direct erna (verkoop → inkoop) ---------------------
     at.session_state["modus"] = "INKOOP"
@@ -193,7 +195,7 @@ def main():
         check(v["item_id"] is None, "vrije invoer heeft item_id NULL")
         check(v["flag"] == "vrij ingevoerd", "flag = 'vrij ingevoerd'")
         check(v["ruwe_tekst"] == "Japanse Eevee Heroes booster box", "ruwe_tekst = ingetypte naam")
-        check(v["afzender"] == "Kevin", "vrije invoer heeft afzender")
+        check(v["afzender"] == "TC", "vrije invoer heeft afzender 'TC'")
 
     # --- bedrag 0 wordt geweigerd ----------------------------------------
     at.session_state["modus"] = "VERKOOP"
@@ -206,18 +208,19 @@ def main():
     check(bool(at.error), "foutmelding getoond bij bedrag €0")
     check(at.session_state["sel"] is not None, "invoer blijft staan na weigering")
 
-    # --- laatste-10 lijst -------------------------------------------------
-    check(len(at.dataframe) == 1, "lijst met laatste transacties wordt getoond")
-    if at.dataframe:
-        df = at.dataframe[0].value
-        check(len(df) == 3 and list(df.columns)[:4] == ["tijd", "type", "bedrag", "afzender"],
-              f"lijst toont 3 regels met juiste kolommen ({list(df.columns)})")
+    # --- laatste invoeren als compacte regels -----------------------------
+    log = [m.value for m in at.markdown if 'class="tc-log"' in m.value]
+    check(len(log) == 1, "compacte lijst met laatste invoeren wordt getoond")
+    if log:
+        check(log[0].count("<br>") == 2, f"3 regels in de lijst ({log[0].count('<br>') + 1})")
+        check("−€60" in log[0] and "+€430" in log[0],
+              f"inkoop met − en verkoop met + ({log[0][:120]})")
+    check(not at.dataframe, "geen tabel meer op het invoerscherm")
 
     # --- twee sessies tegelijk -------------------------------------------
     at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
-    at2.query_params["wie"] = "Mehdi"
     at2.run()
-    check(at2.session_state["wie"] == "Mehdi", "tweede sessie herkent ?wie=Mehdi uit de URL")
+    check(not at2.exception, "tweede sessie start zonder exception")
     at2.text_input(key="zoekterm").set_value("umbreon v").run()
     at2.button(key=[b.key for b in at2.button if b.key.startswith("pick_")][0]).click().run()
     at2.number_input(key="bedrag").set_value(40.0).run()
@@ -225,7 +228,8 @@ def main():
     r = rijen(engine)
     check(len(r) == 4, f"invoer vanuit tweede sessie werkt (kreeg {len(r)} rijen)")
     if len(r) == 4:
-        check(r[3]["afzender"] == "Mehdi", "tweede sessie schrijft eigen afzender")
+        check(r[3]["afzender"] == "TC" and float(r[3]["bedrag"]) == 40.0,
+              "tweede sessie schrijft naar dezelfde database")
 
     # --- schrijffout: invoer blijft behouden ------------------------------
     kapot = create_engine("postgresql+psycopg2://x:y@127.0.0.1:1/none",
@@ -235,7 +239,6 @@ def main():
     st.cache_resource.clear()   # anders blijft de sqlite-engine in de cache hangen
     st.cache_data.clear()
     at3 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
-    at3.query_params["wie"] = "Jishnu"
     at3.run()
     check(not at3.exception, "app crasht niet als de database onbereikbaar is")
     check(bool(at3.error), f"duidelijke foutmelding bij geen verbinding: "

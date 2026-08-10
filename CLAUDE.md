@@ -34,6 +34,11 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
 - `streamlit run beurs_app.py` (poort 8501/8502). Rookproef zonder DB:
   `python tests/test_beurs_app.py` — draait de app headless via `streamlit.testing`
   tegen een SQLite-schaduwschema.
+- Eén gedeelde gebruiker: `afzender` staat vast op `"TC"` (constante `AFZENDER`).
+  Geen naamkeuze — bewust weggehaald, scheelt een scherm per invoer.
+- UI is mobiel-first en leunt op Streamlit's `st-key-<key>`-classes voor CSS
+  (zoekresultaten `pick_<id>`, `bedrag`, `vastleggen`). De tweede regel in een
+  resultaatknop komt van `\n` + `white-space: pre-line`; het grijze deel is `:gray[…]`.
 - Schrijft **alleen** naar `transactions`; nooit afboeken op `items` (bewuste scope-grens).
 - Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte naam.
 - Schrijven kent géén automatische retry (dubbele boeking is erger dan een foutmelding);

@@ -1,18 +1,19 @@
 """TC beurs — snelle invoer voor op de beursvloer.
 
-Vier mensen leggen tegelijk op hun telefoon verkopen en inkopen vast. Elke invoer
-is één losse INSERT in `transactions`, gekoppeld aan één event. Er wordt niets
-afgeboekt uit `items` — alleen transacties vullen.
+Het team legt op de telefoon verkopen en inkopen vast. Elke invoer is één losse
+INSERT in `transactions`, gekoppeld aan één event. Er wordt niets afgeboekt uit
+`items` — alleen transacties vullen.
 
     streamlit run beurs_app.py
 
 Ontwerpkeuzes:
+- Eén gedeelde gebruiker: `afzender` staat vast op "TC". Geen naamkeuze, dat is
+  een scherm minder tussen jou en de invoer.
 - De items-tabel wordt één keer opgehaald en in cache gehouden; zoeken gebeurt
   lokaal. Zo is zoeken instant en kost het geen netwerk op een slechte beursvloer.
 - Schrijven gebeurt zonder automatische retry (pool_pre_ping vangt dode
   connecties al af). Faalt het toch, dan blijft de invoer staan met een
-  duidelijke foutmelding en een knop "probeer opnieuw" — nooit stil falen.
-- Wie je bent staat in de URL (?wie=Kevin), zodat een refresh je keuze niet wist.
+  duidelijke foutmelding — nooit stil falen.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ EVENT_DATUM = date(2026, 8, 15)
 EVENT_LOCATIE = "Nijmegen"
 BEURSDAGEN = {date(2026, 8, 15), date(2026, 8, 16)}
 
-TEAM = ["Jishnu", "Mehdi", "Kevin", "Ömer"]
+AFZENDER = "TC"          # één gedeelde gebruiker
 MODI = ["VERKOOP", "INKOOP"]
 MAX_RESULTATEN = 10
 
@@ -66,16 +67,55 @@ if not os.getenv("SUPABASE_DB_URL"):
     st.stop()
 
 # ------------------------------------------------------------------ mobiel-css
+# Streamlit hangt aan elk element met een key een class `st-key-<key>`; daarmee
+# zijn de zoekresultaten (key `pick_<id>`) los te stylen van de grote CTA.
 
 st.markdown("""
 <style>
-  .block-container {padding-top: 1.2rem; padding-bottom: 3rem;}
-  .stButton > button {min-height: 3rem; font-size: 1.02rem; line-height: 1.25;}
-  .stButton > button p {font-size: 1.02rem;}
-  div[data-testid="stSegmentedControl"] button {min-height: 3rem; font-size: 1.05rem;}
-  input[type="text"], input[type="number"] {font-size: 1.1rem !important;}
-  .tc-bar {display:flex; justify-content:space-between; align-items:center;
-           font-size:.9rem; opacity:.8; margin-bottom:.4rem;}
+  /* Streamlit-balk weg: scheelt ruis én schermruimte op een telefoon */
+  header[data-testid="stHeader"] {display: none;}
+  .block-container {padding-top: 1.5rem; padding-bottom: 4rem; max-width: 34rem;}
+  div[data-testid="stVerticalBlock"] {gap: .9rem;}
+
+  /* knoppen: ruime tap-targets */
+  .stButton > button {min-height: 3.25rem; border-radius: .75rem;}
+  div[data-testid="stSegmentedControl"] button {min-height: 3.25rem;
+      font-size: 1.05rem; font-weight: 600;}
+
+  /* zoekbalk: prominent */
+  .st-key-zoekterm input {font-size: 1.25rem !important; padding: .9rem .75rem !important;}
+
+  /* zoekresultaten: naam vet, daaronder klein set + staat + prijs */
+  .st-key-resultaten div[data-testid="stVerticalBlock"] {gap: .45rem;}
+  [class*="st-key-pick_"] button {min-height: 3.5rem; padding: .6rem .9rem;}
+  [class*="st-key-pick_"] button > div {width: 100%; justify-content: flex-start;}
+  [class*="st-key-pick_"] button p {white-space: pre-line; text-align: left;
+      line-height: 1.35; font-size: 1.05rem; font-weight: 600; margin: 0;}
+  [class*="st-key-pick_"] button p span {font-size: .82rem; font-weight: 400;}
+
+  /* bedrag: het getal is het belangrijkste op het scherm */
+  .st-key-bedrag input {font-size: 2rem !important; font-weight: 700;
+      text-align: right; padding: .6rem .75rem !important;}
+  .st-key-bedrag [data-testid="stNumberInputContainer"]::before,
+  .st-key-vrij_bedrag [data-testid="stNumberInputContainer"]::before {
+      content: "€"; align-self: center; padding-left: .8rem; font-weight: 700;
+      opacity: .45;}
+  .st-key-bedrag [data-testid="stNumberInputContainer"]::before {font-size: 1.6rem;}
+
+  /* VASTLEGGEN: grote knop onderaan */
+  .st-key-vastleggen button {min-height: 4rem; font-size: 1.2rem; font-weight: 700;
+      letter-spacing: .03em;}
+
+  /* bevestiging: groot, kort, vervaagt vanzelf */
+  @keyframes tc-fade {0%, 65% {opacity: 1;} 100% {opacity: 0; visibility: hidden;}}
+  .tc-ok {animation: tc-fade 6s ease-in forwards; background: rgba(33,195,84,.14);
+      border-left: .35rem solid rgb(33,195,84); border-radius: .6rem;
+      padding: .9rem 1rem; font-size: 1.25rem; font-weight: 700; line-height: 1.3;
+      margin-bottom: .5rem;}
+
+  /* laatste invoeren: compacte regels in plaats van een tabel */
+  .tc-log {font-size: .85rem; opacity: .7; line-height: 1.9;}
+  .tc-log b {font-weight: 600;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -170,7 +210,7 @@ def laatste_transacties(eid: int, versie: int) -> pd.DataFrame:
     """, {"eid": eid})
 
 
-def schrijf_transactie(*, item_id, bedrag, tx_type, afzender, ruwe_tekst, flag=None) -> int:
+def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None) -> int:
     """Eén losse insert. Geen retry: een dubbel geboekte verkoop is erger dan
     een foutmelding waarna je zelf opnieuw tikt."""
     nu = datetime.now()
@@ -183,7 +223,7 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, afzender, ruwe_tekst, flag=N
             "kanaal": tx_type,
             "type": tx_type,
             "bedrag": bedrag,
-            "afzender": afzender,
+            "afzender": AFZENDER,
             "flag": flag,
             "ruwe_tekst": ruwe_tekst,
         }).scalar()
@@ -216,7 +256,6 @@ def zoek(df: pd.DataFrame, term: str) -> pd.DataFrame:
 
 
 def init_state():
-    st.session_state.setdefault("wie", st.query_params.get("wie"))
     st.session_state.setdefault("modus", "VERKOOP")
     st.session_state.setdefault("sel", None)          # gekozen item (dict)
     st.session_state.setdefault("bevestiging", None)
@@ -246,11 +285,16 @@ def kies_item(rij: dict):
     prefill_bedrag()
 
 
-def na_succes(tekst: str):
-    st.session_state["bevestiging"] = tekst
+def na_succes(naam: str, bedrag: float):
+    st.session_state["bevestiging"] = f"✓ {naam} — €{bedrag:,.2f}"
     st.session_state["fout"] = None
     st.session_state["tx_versie"] += 1
     st.session_state["_reset"] = True
+    st.rerun()
+
+
+def meld_fout(melding: str, detail: str):
+    st.session_state["fout"] = {"melding": melding, "detail": detail}
     st.rerun()
 
 
@@ -258,45 +302,18 @@ init_state()
 
 # ------------------------------------------------------------------ pincode
 
-
 PIN = secret("TC_BEURS_PIN")
 if PIN and not st.session_state.get("ontgrendeld"):
-    st.title("🃏 TC Beurs")
-    ingevoerd = st.text_input("Pincode", type="password", key="pin_invoer")
+    st.text_input("Pincode", type="password", key="pin_invoer")
     if st.button("Open", type="primary", width="stretch"):
-        if ingevoerd == PIN:
+        if st.session_state["pin_invoer"] == PIN:
             st.session_state["ontgrendeld"] = True
             st.rerun()
         else:
             st.error("Verkeerde pincode.")
     st.stop()
 
-# ------------------------------------------------------------------ wie ben je
-
-if st.session_state["wie"] not in TEAM:
-    st.title("🃏 TC Beurs")
-    st.subheader("Wie ben je?")
-    for naam in TEAM:
-        if st.button(naam, key=f"wie_{naam}", width="stretch", type="primary"):
-            st.session_state["wie"] = naam
-            st.query_params["wie"] = naam
-            st.rerun()
-    st.caption(EVENT_NAAM)
-    st.stop()
-
-WIE = st.session_state["wie"]
-VANDAAG = date.today()
-
-kop, knop = st.columns([3, 1], vertical_alignment="center")
-kop.markdown(f"**👤 {WIE}** · {VANDAAG.strftime('%d-%m-%Y')}")
-if knop.button("wissel", key="wissel", width="stretch"):
-    st.session_state["wie"] = None
-    st.query_params.clear()
-    st.rerun()
-
-if VANDAAG not in BEURSDAGEN:
-    st.warning(f"Let op: vandaag ({VANDAAG.strftime('%d-%m-%Y')}) is geen beursdag. "
-               "Invoer komt wél in de database — dit is dus een test.", icon="🧪")
+# ------------------------------------------------------------------ modus
 
 st.segmented_control("Wat leg je vast?", MODI, key="modus", width="stretch",
                      on_change=prefill_bedrag, label_visibility="collapsed",
@@ -304,147 +321,125 @@ st.segmented_control("Wat leg je vast?", MODI, key="modus", width="stretch",
 MODUS = st.session_state["modus"] or "VERKOOP"
 TX_TYPE = "verkoop" if MODUS == "VERKOOP" else "inkoop"
 
-# ------------------------------------------------------------------ bevestiging
+VANDAAG = date.today()
+if VANDAAG not in BEURSDAGEN:
+    st.caption(f"{VANDAAG.strftime('%d-%m-%Y')} is geen beursdag — invoer telt wél mee.")
+
+# ------------------------------------------------------------------ meldingen
 
 if st.session_state["bevestiging"]:
-    st.success(st.session_state["bevestiging"], icon="✅")
+    st.markdown(f'<div class="tc-ok">{st.session_state["bevestiging"]}</div>',
+                unsafe_allow_html=True)
 
 if st.session_state["fout"]:
     st.error(st.session_state["fout"]["melding"], icon="⚠️")
-    st.caption("Je invoer staat hieronder nog — tik nogmaals op VASTLEGGEN "
-               "zodra je weer verbinding hebt. Niets is verloren.")
-    with st.expander("Technische details"):
+    with st.expander("Details"):
         st.code(st.session_state["fout"]["detail"])
 
-# ------------------------------------------------------------------ zoeken
+# ------------------------------------------------------------------ kaart kiezen
 
 try:
     items = laad_items()
 except SQLAlchemyError as e:
-    st.error("Geen verbinding met de database. Controleer je internet en ververs.", icon="🚫")
-    with st.expander("Technische details"):
+    st.error("Geen verbinding met de database.", icon="🚫")
+    with st.expander("Details"):
         st.code(str(e))
     st.stop()
 
 sel = st.session_state["sel"]
 
 if sel:
+    regels = [x for x in [sel.get("kenmerk"), sel.get("conditie")] if x]
     st.markdown(f"### {sel['naam']}")
-    onze = sel.get("onze_naam")
-    st.caption(" · ".join(x for x in [
-        sel.get("kenmerk"), sel.get("conditie"), sel.get("categorie"),
-        f"bij ons: {onze}" if onze and onze != sel["naam"] else None] if x))
-    if st.button("← andere kaart kiezen", key="deselect", width="stretch"):
+    if regels:
+        st.caption(" · ".join(regels))
+    if st.button("✕ andere kaart", key="deselect"):
         st.session_state["sel"] = None
         st.rerun()
 else:
-    st.text_input("Zoek kaart", key="zoekterm", placeholder="typ een paar letters…",
+    st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
                   label_visibility="collapsed")
     term = st.session_state.get("zoekterm", "")
     if len(term.strip()) >= 2:
         treffers = zoek(items, term)
-        if treffers.empty:
-            st.info("Geen kaart gevonden. Gebruik hieronder 'vrij invoeren'.")
-        else:
+        with st.container(key="resultaten"):
             for _, r in treffers.head(MAX_RESULTATEN).iterrows():
-                naam = r["naam"] if len(r["naam"]) <= 38 else r["naam"][:37] + "…"
-                prijs = f"€{r['comp_prijs']:.2f}" if pd.notna(r["comp_prijs"]) else "€ ?"
-                label = " · ".join(x for x in [naam, kenmerk(r), conditie(r), prijs] if x)
-                if st.button(label, key=f"pick_{r['id']}", width="stretch"):
+                prijs = f"€{r['comp_prijs']:,.2f}" if pd.notna(r["comp_prijs"]) else "€ ?"
+                detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs] if x)
+                # Zachte regelafbreking (\n) + CSS `white-space: pre-line` geeft de
+                # tweede regel; :gray[] maakt er een span van die klein wordt gezet.
+                if st.button(f"{r['naam']}\n:gray[{detail}]", key=f"pick_{r['id']}",
+                             width="stretch"):
                     kies_item({"id": int(r["id"]), "naam": r["naam"],
-                               "onze_naam": r["onze_naam"], "kenmerk": kenmerk(r),
-                               "conditie": conditie(r), "categorie": r["categorie"],
+                               "kenmerk": kenmerk(r), "conditie": conditie(r),
                                "comp_prijs": None if pd.isna(r["comp_prijs"])
                                else float(r["comp_prijs"])})
                     st.rerun()
-            if len(treffers) > MAX_RESULTATEN:
-                st.caption(f"{len(treffers)} treffers — typ meer letters voor minder.")
-    elif term.strip():
-        st.caption("Typ minstens 2 letters.")
+            if treffers.empty:
+                st.caption("Niets gevonden — gebruik *vrij invoeren* hieronder.")
 
 # ------------------------------------------------------------------ vastleggen
 
-bedrag = st.number_input(f"Bedrag ({MODUS.lower()}) in €", min_value=0.0, step=0.50,
-                         format="%.2f", key="bedrag")
+st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f", key="bedrag",
+                label_visibility="collapsed")
 
-vastleggen = st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
-                       disabled=sel is None,
-                       key="vastleggen")
-if sel is None:
-    st.caption("Kies eerst een kaart, of gebruik 'vrij invoeren' hieronder.")
-
-if vastleggen and sel:
+if st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
+             disabled=sel is None, key="vastleggen") and sel:
+    bedrag = float(st.session_state["bedrag"])
     if bedrag <= 0:
-        st.session_state["fout"] = {"melding": "Bedrag is €0,00 — vul een bedrag in.",
-                                    "detail": "geen database-actie uitgevoerd"}
-        st.rerun()
+        meld_fout("Vul een bedrag in.", "geen database-actie uitgevoerd")
     else:
         try:
-            schrijf_transactie(item_id=sel["id"], bedrag=float(bedrag), tx_type=TX_TYPE,
-                               afzender=WIE, ruwe_tekst=sel["naam"])
-            na_succes(f"{sel['naam']} — €{bedrag:.2f} {MODUS.lower()} vastgelegd door {WIE}")
+            schrijf_transactie(item_id=sel["id"], bedrag=bedrag, tx_type=TX_TYPE,
+                               ruwe_tekst=sel["naam"])
+            na_succes(sel["naam"], bedrag)
         except SQLAlchemyError as e:
             engine().dispose()
-            st.session_state["fout"] = {
-                "melding": f"Opslaan mislukt — {sel['naam']} €{bedrag:.2f} "
-                           f"{MODUS.lower()} is NIET vastgelegd.",
-                "detail": str(e)[:800]}
-            st.rerun()
+            meld_fout(f"NIET vastgelegd: {sel['naam']} €{bedrag:,.2f}. "
+                      "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
 
 # ------------------------------------------------------------------ vangnet
 
-with st.expander("🆘 Kaart staat er niet in → vrij invoeren"):
-    st.text_input("Naam van de kaart / het product", key="vrij_naam",
-                  placeholder="bijv. Umbreon VMAX Alt Art JP")
-    st.number_input("Bedrag in €", min_value=0.0, step=0.50, format="%.2f",
-                    key="vrij_bedrag")
+with st.expander("Kaart staat er niet in → vrij invoeren"):
+    st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
+                  label_visibility="collapsed")
+    st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f",
+                    key="vrij_bedrag", label_visibility="collapsed")
     vrij_type = st.segmented_control("Soort", MODI, key="vrij_modus", default=MODUS,
-                                     required=True, width="stretch") or MODUS
-    if st.button("VASTLEGGEN (vrij)", type="primary", width="stretch", key="vrij_knop"):
+                                     required=True, width="stretch",
+                                     label_visibility="collapsed") or MODUS
+    if st.button("VASTLEGGEN", type="primary", width="stretch", key="vrij_knop"):
         naam = (st.session_state.get("vrij_naam") or "").strip()
         vb = float(st.session_state.get("vrij_bedrag") or 0)
-        if not naam:
-            st.error("Vul een naam in.")
-        elif vb <= 0:
-            st.error("Vul een bedrag in.")
+        if not naam or vb <= 0:
+            st.error("Vul een naam én een bedrag in.")
         else:
             try:
                 schrijf_transactie(
                     item_id=None, bedrag=vb,
                     tx_type="verkoop" if vrij_type == "VERKOOP" else "inkoop",
-                    afzender=WIE, ruwe_tekst=naam, flag="vrij ingevoerd")
-                na_succes(f"{naam} — €{vb:.2f} {vrij_type.lower()} vastgelegd door {WIE} "
-                          "(vrij ingevoerd)")
+                    ruwe_tekst=naam, flag="vrij ingevoerd")
+                na_succes(naam, vb)
             except SQLAlchemyError as e:
                 engine().dispose()
-                st.session_state["fout"] = {
-                    "melding": f"Opslaan mislukt — {naam} €{vb:.2f} is NIET vastgelegd.",
-                    "detail": str(e)[:800]}
-                st.rerun()
+                meld_fout(f"NIET vastgelegd: {naam} €{vb:,.2f}. "
+                          "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
 
 # ------------------------------------------------------------------ laatste 10
-
-st.divider()
-rij1, rij2 = st.columns([3, 1], vertical_alignment="center")
-rij1.markdown("**Laatste 10 van deze beurs**")
-if rij2.button("ververs", key="ververs", width="stretch"):
-    st.session_state["tx_versie"] += 1
-    laad_items.clear()
-    st.rerun()
 
 try:
     recent = laatste_transacties(event_id(), st.session_state["tx_versie"])
 except SQLAlchemyError:
-    st.caption("Lijst kon niet worden opgehaald (verbinding). Invoeren werkt mogelijk wel.")
-else:
-    if recent.empty:
-        st.caption("Nog niets vastgelegd.")
-    else:
-        toon = recent.rename(columns={"ruwe_tekst": "kaart"})
-        toon["bedrag"] = pd.to_numeric(toon["bedrag"], errors="coerce").map(
-            lambda v: f"€{v:.2f}" if pd.notna(v) else "")
-        toon["tijd"] = toon["tijd"].astype(str).str.slice(0, 5)
-        st.dataframe(toon[["tijd", "type", "bedrag", "afzender", "kaart", "flag"]],
-                     hide_index=True, width="stretch")
+    recent = None
 
-st.caption(f"{EVENT_NAAM} · event #{event_id()}")
+if recent is not None and not recent.empty:
+    regels = []
+    for _, r in recent.iterrows():
+        bedrag = float(pd.to_numeric(r["bedrag"], errors="coerce") or 0)
+        # hele euro's kort, centen alleen tonen als ze er zijn
+        geld = f"{bedrag:,.0f}" if bedrag == int(bedrag) else f"{bedrag:,.2f}"
+        teken = "−" if r["type"] == "inkoop" else "+"
+        regels.append(f'{str(r["tijd"])[:5]} &nbsp; <b>{teken}€{geld}</b> '
+                      f'&nbsp; {str(r["ruwe_tekst"])[:38]}')
+    st.markdown(f'<div class="tc-log">{"<br>".join(regels)}</div>',
+                unsafe_allow_html=True)
