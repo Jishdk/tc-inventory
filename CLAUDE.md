@@ -1,0 +1,99 @@
+# TC Inventory — Claude Code Context
+
+Zie ook: `../CLAUDE.md` voor algemene Trader Collective context en brand.
+
+## Wat doet deze map
+
+Pipeline voor inventaris- en beursadministratie:
+1. WhatsApp-beursexports parsen → transactie-CSV (`scripts/parse_whatsapp.py`).
+2. Inventaris koppelen aan de Cardmarket-catalogus (identiteit, `scripts/enrich_inventaris.py`).
+3. Alles in een Supabase-database + Streamlit-dashboard (`src/`, `app.py`).
+4. Beursfoto's koppelen aan inventaris-items (match-voorstellen, `src/match_foto.py`).
+
+## Database (Supabase, POC)
+
+- Connectie via `SUPABASE_DB_URL` in `inventory/.env` (niet in git).
+- **Let op:** de Supabase *direct connection* (`db.<ref>.supabase.co`) is IPv6-only en
+  onbereikbaar vanaf deze WSL-machine. Gebruik de **session pooler**
+  (`aws-0-<regio>.pooler.supabase.com:5432`, IPv4). `src/db.py` parst de DSN zelf
+  (wachtwoord met speciale tekens) en dwingt `sslmode=require` af.
+- Migraties: `python src/migrate.py` (draait `migrations/*.sql`, idempotent).
+- Tabellen: `events`, `items` (572 rijen), `transactions` (130), `price_points` (leeg,
+  voor latere prijs-sync), `match_voorstellen` (Sessie A).
+- Imports: `src/import_inventory.py`, `src/import_transactions.py` — idempotent via
+  `bron_rij` (positie in bronbestand; er zijn dubbele naam+code-combinaties).
+- Dashboard: `streamlit run app.py` → http://localhost:8501 (3 tabs: Overzicht,
+  Inventaris, Transacties). Validatie tegen referentie verkoop €16.768 / inkoop €3.619.
+
+## Beurs-app (snelle invoer op de telefoon)
+
+`beurs_app.py` — losstaande Streamlit-app waarmee het team tijdens een beurs live
+verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
+(`EVENT_NAAM` bovenin; beide dagen hangen aan dit ene event, `datum` = dag van invoer).
+
+- `streamlit run beurs_app.py` (poort 8501/8502). Rookproef zonder DB:
+  `python tests/test_beurs_app.py` — draait de app headless via `streamlit.testing`
+  tegen een SQLite-schaduwschema.
+- Schrijft **alleen** naar `transactions`; nooit afboeken op `items` (bewuste scope-grens).
+- Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte naam.
+- Schrijven kent géén automatische retry (dubbele boeking is erger dan een foutmelding);
+  bij een fout blijft de invoer op het scherm staan. Lezen retryt één keer.
+- Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
+
+## Kanaal-mapping (transactions)
+
+Bron kent 2 WhatsApp-kanalen. `sales` → kanaal `verkoop`, `inkoop` → `inkoop`. Zo klopt
+"som per kanaal" met de referenties (kanaal verkoop = €16.725, inkoop = €3.619; de €43
+gat naar €16.768 zijn sticker-verkopen zonder leesbaar bedrag = flag CHECK BEDRAG).
+De aard per regel (verkoop/inkoop/trade) staat in kolom `type`.
+
+## Bestanden (`../data/`)
+
+| Bestand | Beschrijving |
+|---|---|
+| `TC_Inventaris_v5.xlsx` | Bron-inventaris (sheet "Inventaris", 572 regels) |
+| `inventaris_verrijkt_v2.csv` | Verrijkte identiteit (na 2e pass): 367 zeker, 81 twijfel, 72 jp, 26 geen_match_naam, 18 zeker_prijs, 8 geen_match |
+| `twijfel_singles.csv` / `twijfel_later.csv` | Handmatig na te lopen twijfelgevallen (15 singles-met-code / 66 rest) |
+| `match_voorstellen_rapport.txt` | Meetrapport Sessie A (foto → match) |
+| `inkoop27072026.zip`, `sales27072026.zip` | WhatsApp-exports (v2 = mét media, uitgepakt in `_inkoop_v2`/`_sales_v2`) |
+| `_cmapi_rapid_cache.json` | Cache API-searches (bewaren) |
+
+`inventory/data/`: transactie-CSV's (`_clean` is definitief) + `_vision_findings.json`
+(121 handmatig/visueel gelezen beursfoto's, keyed op bestandsnaam — input voor match_foto).
+
+## API (identiteit + prijzen)
+
+RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.com`,
+key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
+`lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
+trial, niet meer gebruikt.)
+
+## Fase-status (10-08-2026)
+
+- 🚨 **Supabase-project staat gepauzeerd** (pooler: `tenant/user postgres.<ref> not found`,
+  `<ref>.supabase.co` resolvet niet). Hervatten in het dashboard, daarna de pooler-string
+  opnieuw kopiëren naar `.env` — de regio/host kan na een restore veranderen.
+- ✅ `beurs_app.py` + `tests/test_beurs_app.py` gebouwd (zie hierboven); alle checks groen
+  tegen het SQLite-schaduwschema, nog niet tegen Supabase zelf.
+
+## Fase-status (30-07-2026)
+
+- ✅ Beurstransacties juli geparsed, gevalideerd, in database.
+- ✅ Inventaris-identiteit: 367/572 zeker gematcht; twijfels gesplitst voor review.
+- ✅ Supabase-database + Streamlit-dashboard (POC) draaien.
+- ✅ **Sessie A opnieuw gedraaid met nieuwe exports (mét media):** 112/119 verkoop/trade
+  hebben nu een foto (was 32). Van €16.725 verkoop/trade is €997 zeker te koppelen (was
+  €163). Rest: 43 meerdere-kaarten-stapels/trades + 46 twijfel (veel sealed JP product
+  en slabs die niet in de singles-inventaris staan). Niets afgeboekt.
+- ⏳ **Sessie B (nog te doen):** mens reviewt de match_voorstellen (twijfel + meerdere).
+  Nodig: stapels/trades splitsen, en een plek voor sealed product + graded slabs buiten
+  de singles-inventaris.
+- ⏳ 81 inventaris-twijfels handmatig nalopen; JP (72) + CN (2) apart oplossen.
+- ⏳ Prijs-sync (`price_points`) nog niet gebouwd.
+
+## Let op
+
+- Geen git repo. Oude bestanden 1e matching-poging in `../_archief/`.
+- Secrets alleen in `.env` (RapidAPI + Supabase), nooit committen.
+- `data/_inkoop_v2` / `_sales_v2` zijn uitgepakte media (niet in git); `transactions.media_file`
+  wijst ernaar. Opnieuw uitpakken uit de zips kan altijd.

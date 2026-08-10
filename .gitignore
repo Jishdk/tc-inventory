@@ -1,0 +1,13 @@
+# secrets — nooit committen
+.env
+.streamlit/secrets.toml
+
+# bedrijfsdata (blijft lokaal, ook in een privé-repo niet nodig voor de app)
+data/
+*.xlsx
+*.csv
+*.zip
+
+# python
+__pycache__/
+*.pyc
