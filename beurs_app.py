@@ -76,9 +76,10 @@ if not os.getenv("SUPABASE_DB_URL"):
 # ------------------------------------------------------------------ mobiel-css
 # Streamlit hangt aan elk element met een key een class `st-key-<key>`; daarmee
 # zijn de zoekresultaten (key `pick_<id>`) los te stylen van de grote CTA.
+# Dit blok wordt pas verderop gerenderd, samen met de kleuren van de actieve
+# modus — één <style>-element in plaats van twee losse (die ruimte innemen).
 
-st.markdown("""
-<style>
+BASIS_CSS = """
   /* Streamlit-balk weg: scheelt ruis én schermruimte op een telefoon */
   header[data-testid="stHeader"] {display: none;}
   .block-container {padding-top: 1.5rem; padding-bottom: 4rem; max-width: 34rem;}
@@ -138,8 +139,10 @@ st.markdown("""
   [class*="st-key-weg_"] button > div {width: 100%; justify-content: flex-start;}
   [class*="st-key-weg_"] button p {margin: 0; font-size: 1rem; text-align: left;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-  .st-key-stapel_vrij_knop button {min-height: 3.1rem; font-size: 1.4rem;
-      font-weight: 700; padding: 0;}
+  .st-key-stapel_vrij_knop button {min-height: 3.1rem; font-size: .95rem;
+      font-weight: 600; padding: 0;}
+  .tc-teller {font-size: .9rem; font-weight: 600; opacity: .6;
+      margin: .3rem 0 -.35rem; letter-spacing: .02em;}
 
   /* bedrag: het getal is het belangrijkste op het scherm */
   .st-key-bedrag input, .st-key-totaal_bedrag input {font-size: 2rem !important;
@@ -169,13 +172,19 @@ st.markdown("""
       padding: .9rem 1rem; font-size: 1.25rem; font-weight: 700; line-height: 1.3;
       margin-bottom: .5rem; overflow: hidden;}
 
+  /* terzijdes (geen beursdag): mag je gerust over het hoofd zien */
+  .tc-note {font-size: .72rem; opacity: .4; text-align: center; margin: -.4rem 0 0;}
+
+  /* vangnet: lichte rand, het is een uitwijk en geen hoofdroute */
+  [data-testid="stExpander"] details {border-color: rgba(128,128,128,.22);}
+  [data-testid="stExpander"] summary {font-size: .9rem; opacity: .75;}
+
   /* laatste invoeren: compacte regels in plaats van een tabel */
   .tc-log {font-size: .85rem; opacity: .7; line-height: 1.9;}
   .tc-log b {font-weight: 600;}
   .st-key-undo button, .st-key-undo_ja button, .st-key-undo_nee button {
       min-height: 2.6rem; font-size: .9rem;}
-</style>
-""", unsafe_allow_html=True)
+"""
 
 # ------------------------------------------------------------------ database
 
@@ -208,10 +217,11 @@ RETURNING id
 
 INSERT_TX = text("""
 INSERT INTO transactions (
-    event_id, item_id, datum, tijd, kanaal, type, bedrag, afzender, flag, ruwe_tekst
+    event_id, item_id, datum, tijd, kanaal, type, bedrag, afzender, flag,
+    ruwe_tekst, code
 ) VALUES (
     :event_id, :item_id, :datum, :tijd, :kanaal, :type, :bedrag, :afzender,
-    :flag, :ruwe_tekst
+    :flag, :ruwe_tekst, :code
 )
 RETURNING id
 """)
@@ -282,9 +292,13 @@ def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, float]:
     return {str(r["type"]): float(r["som"]) for _, r in df.iterrows()}
 
 
-def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None) -> int:
+def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
+                       code=None) -> int:
     """Eén losse insert. Geen retry: een dubbel geboekte verkoop is erger dan
-    een foutmelding waarna je zelf opnieuw tikt."""
+    een foutmelding waarna je zelf opnieuw tikt.
+
+    `code` is de kaartcode ("173/195", "EVS 215"). Bij een vrij ingevoerde kaart
+    is dat het enige haakje om 'm later alsnog aan de inventaris te koppelen."""
     nu = datetime.now()
     with engine().begin() as conn:
         return conn.execute(INSERT_TX, {
@@ -298,6 +312,7 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None) -> in
             "afzender": AFZENDER,
             "flag": flag,
             "ruwe_tekst": ruwe_tekst,
+            "code": (code or "").strip() or None,
         }).scalar()
 
 
@@ -377,16 +392,19 @@ def init_state():
     if st.session_state.pop("_leeg_zoek", False):
         st.session_state["stapel_zoek"] = ""
         st.session_state["stapel_vrij"] = ""
+        st.session_state["stapel_code"] = ""
     if st.session_state.pop("_reset", False):
         st.session_state["sel"] = None
         st.session_state["zoekterm"] = ""
         st.session_state["bedrag"] = 0.0
         st.session_state["eigen_pct"] = None
         st.session_state["vrij_naam"] = ""
+        st.session_state["vrij_code"] = ""
         st.session_state["vrij_bedrag"] = 0.0
         st.session_state["stapel"] = []
         st.session_state["stapel_zoek"] = ""
         st.session_state["stapel_vrij"] = ""
+        st.session_state["stapel_code"] = ""
         st.session_state["totaal_bedrag"] = 0.0
 
 
@@ -442,6 +460,30 @@ def meld_fout(melding: str, detail: str):
 
 init_state()
 
+# ------------------------------------------------------------------ stijl
+# Kleur per modus: verkoop groen, inkoop rood (het TC-rood). Eén blik op de knop
+# is genoeg om te zien wát je aan het boeken bent. De modus staat al in
+# session_state vóór het script draait, dus dit kan in hetzelfde <style>-blok.
+
+MODUS_KLEUR = {"VERKOOP": "#1B9E4B", "INKOOP": "#F20519"}
+_modus = st.session_state.get("modus") or "VERKOOP"
+_vrij_modus = st.session_state.get("vrij_modus") or _modus
+KLEUR, VRIJ_KLEUR = MODUS_KLEUR[_modus], MODUS_KLEUR[_vrij_modus]
+
+st.markdown(f"""<style>
+{BASIS_CSS}
+  /* :not(:disabled) — een uitgeschakelde knop moet grijs blijven, anders lijkt
+     'ie klaar voor gebruik terwijl er nog geen kaart gekozen is. */
+  .st-key-vastleggen button:not(:disabled),
+  .st-key-stapel_vastleggen button:not(:disabled) {{
+      background: {KLEUR} !important; border-color: {KLEUR} !important;
+      color: #fff !important;}}
+  .st-key-vrij_knop button:not(:disabled) {{background: {VRIJ_KLEUR} !important;
+      border-color: {VRIJ_KLEUR} !important; color: #fff !important;}}
+  .st-key-modus button[aria-checked="true"] {{border-color: {KLEUR} !important;
+      color: {KLEUR} !important; background: {KLEUR}14 !important;}}
+</style>""", unsafe_allow_html=True)
+
 # ------------------------------------------------------------------ pincode
 
 PIN = secret("TC_BEURS_PIN")
@@ -489,7 +531,9 @@ INKOOP_MODUS = (st.session_state.get("inkoop_modus") or "Per kaart"
 STAPEL_MODUS = MODUS == "INKOOP" and INKOOP_MODUS == "Totaal"
 
 if VANDAAG not in BEURSDAGEN:
-    st.caption(f"{VANDAAG.strftime('%d-%m-%Y')} is geen beursdag — invoer telt wél mee.")
+    # Klein en grijs: het is een terzijde, geen waarschuwing — de invoer telt gewoon.
+    st.markdown(f'<div class="tc-note">{VANDAAG.strftime("%d-%m-%Y")} valt buiten de '
+                f'beursdagen — invoer telt wél mee</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ meldingen
 
@@ -518,38 +562,52 @@ if STAPEL_MODUS:
     # dan één kaart. Wát erin zat staat in ruwe_tekst, het totaal is leidend.
     stapel = st.session_state["stapel"]
 
-    st.text_input("Zoek kaart", key="stapel_zoek", placeholder="zoek kaart",
+    st.text_input("Zoek kaart", key="stapel_zoek",
+                  placeholder="zoek kaart om toe te voegen",
                   label_visibility="collapsed")
     term = st.session_state.get("stapel_zoek", "")
     if len(term.strip()) >= 2:
         gekozen = toon_treffers(items, term, "add_", "stapel_resultaten",
                                 "Niets gevonden — typ de naam hieronder.")
         if gekozen is not None:
-            stapel.append({"id": int(gekozen["id"]), "naam": gekozen["naam"]})
+            stapel.append({"id": int(gekozen["id"]), "naam": gekozen["naam"],
+                           "code": kenmerk(gekozen)})
             st.session_state["_leeg_zoek"] = True
             st.rerun()
 
-    kol_naam, kol_plus = st.columns([4, 1], vertical_alignment="bottom")
-    kol_naam.text_input("Vrij toevoegen", key="stapel_vrij",
-                        placeholder="of typ zelf een naam", label_visibility="collapsed")
-    if kol_plus.button("+", key="stapel_vrij_knop", width="stretch"):
+    # Vrij toevoegen: de naam is het langste veld en krijgt een eigen regel,
+    # code + knop eronder. Zo blijft het op telefoonbreedte twee nette rijen.
+    st.text_input("Vrij toevoegen", key="stapel_vrij",
+                  placeholder="of typ zelf een naam", label_visibility="collapsed")
+    kol_code, kol_plus = st.columns([2, 1], vertical_alignment="center")
+    kol_code.text_input("Code", key="stapel_code", placeholder="code (optioneel)",
+                        label_visibility="collapsed")
+    if kol_plus.button("+ toevoegen", key="stapel_vrij_knop", width="stretch"):
         naam = (st.session_state.get("stapel_vrij") or "").strip()
         if naam:
-            stapel.append({"id": None, "naam": naam})
+            stapel.append({"id": None, "naam": naam,
+                           "code": (st.session_state.get("stapel_code") or "").strip()})
             st.session_state["_leeg_zoek"] = True
             st.rerun()
+
+    st.markdown(f'<div class="tc-teller">Stapel: <b>{len(stapel)}</b> '
+                f'{"kaart" if len(stapel) == 1 else "kaarten"}</div>',
+                unsafe_allow_html=True)
 
     if stapel:
         # Elke regel is zelf de weg-knop: één tap haalt 'm eruit. Scheelt een
         # kolommen-layout die op een telefoon toch uit elkaar valt.
-        st.caption("Tik een kaart om 'm uit de stapel te halen.")
         for i, kaart in enumerate(stapel):
-            if st.button(f"✕  {i + 1}. {kaart['naam']}", key=f"weg_{i}",
-                         width="stretch"):
+            regel = f"{i + 1}. {kaart['naam']}"
+            if kaart.get("code"):
+                regel += f" · {kaart['code']}"
+            if st.button(f"✕  {regel}", key=f"weg_{i}", width="stretch"):
                 stapel.pop(i)
                 st.rerun()
+        st.caption("Tik een kaart om 'm uit de stapel te halen.")
     else:
-        st.caption("Nog niets in de stapel — zoek een kaart of typ een naam.")
+        st.caption("Nog leeg — zoek een kaart, of typ zelf een naam en tik "
+                   "**+ toevoegen**.")
 
     st.number_input("Totaalbedrag", min_value=0.0, step=0.50, format="%.2f",
                     key="totaal_bedrag", label_visibility="collapsed")
@@ -561,7 +619,10 @@ if STAPEL_MODUS:
         if totaal <= 0:
             meld_fout("Vul een totaalbedrag in.", "geen database-actie uitgevoerd")
         else:
-            namen = " · ".join(k["naam"] for k in stapel)
+            # Naam mét code per kaart, zodat de regel later nog te herleiden is.
+            namen = " · ".join(
+                f"{k['naam']} [{k['code']}]" if k.get("code") else k["naam"]
+                for k in stapel)
             omschrijving = f"Stapel {len(stapel)} kaarten: {namen}"
             try:
                 tx = schrijf_transactie(item_id=None, bedrag=totaal, tx_type="inkoop",
@@ -622,7 +683,8 @@ else:
         else:
             try:
                 tx = schrijf_transactie(item_id=sel["id"], bedrag=bedrag,
-                                        tx_type=TX_TYPE, ruwe_tekst=sel["naam"])
+                                        tx_type=TX_TYPE, ruwe_tekst=sel["naam"],
+                                        code=sel.get("kenmerk"))
                 na_succes(sel["naam"], bedrag, tx)
             except SQLAlchemyError as e:
                 engine().dispose()
@@ -632,6 +694,11 @@ else:
     # --- vangnet ----------------------------------------------------------
     with st.expander("Kaart staat er niet in → vrij invoeren"):
         st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
+                      label_visibility="collapsed")
+        # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
+        # aan de inventaris te koppelen — hij heeft geen item_id.
+        st.text_input("Code", key="vrij_code",
+                      placeholder="code, bijv. 173/195 of swsh260 (mag leeg)",
                       label_visibility="collapsed")
         st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f",
                         key="vrij_bedrag", label_visibility="collapsed")
@@ -648,7 +715,8 @@ else:
                     tx = schrijf_transactie(
                         item_id=None, bedrag=vb,
                         tx_type="verkoop" if vrij_type == "VERKOOP" else "inkoop",
-                        ruwe_tekst=naam, flag="vrij ingevoerd")
+                        ruwe_tekst=naam, flag="vrij ingevoerd",
+                        code=st.session_state.get("vrij_code"))
                     na_succes(naam, vb, tx)
                 except SQLAlchemyError as e:
                     engine().dispose()

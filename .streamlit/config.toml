@@ -1,0 +1,15 @@
+# Streamlit-thema voor de beurs-app (en het dashboard).
+#
+# Vastgezet op light: de app wordt op een beursvloer bij daglicht gebruikt en de
+# eigen CSS is daarop afgestemd — een telefoon in dark mode gaf anders een heel
+# ander scherm dan wat we hier testen.
+#
+# Kleuren volgen de TC-huisstijl (zie ../CLAUDE.md). Komt de definitieve
+# designer-huisstijl binnen, dan is dit het enige bestand dat mee hoeft.
+
+[theme]
+base = "light"
+primaryColor = "#F20519"           # TC primary red
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F7"
+textColor = "#0D0D0D"              # TC black

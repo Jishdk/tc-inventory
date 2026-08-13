@@ -20,6 +20,8 @@ Pipeline voor inventaris- en beursadministratie:
 - Migraties: `python src/migrate.py` (draait `migrations/*.sql`, idempotent).
 - Tabellen: `events`, `items` (572 rijen), `transactions` (130), `price_points` (leeg,
   voor latere prijs-sync), `match_voorstellen` (Sessie A).
+- `transactions.code` is toegevoegd in `003_transactions_code.sql` (13-08-2026) voor de
+  vrije invoer van de beurs-app; bestaande rijen houden `NULL`.
 - Imports: `src/import_inventory.py`, `src/import_transactions.py` — idempotent via
   `bron_rij` (positie in bronbestand; er zijn dubbele naam+code-combinaties).
 - Dashboard: `streamlit run app.py` → http://localhost:8501 (3 tabs: Overzicht,
@@ -42,7 +44,10 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
   `:gray[…]`. Streamlit stapelt kolommen onder telefoonbreedte — daarom staat er een
   `flex-wrap: nowrap` op `stHorizontalBlock` (anders valt de rekenhulp uit elkaar).
 - Schrijft **alleen** naar `transactions`; nooit afboeken op `items` (bewuste scope-grens).
-- Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte naam.
+- Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte
+  naam, plus een **los code-veld** (`173/195`, `swsh260`) dat in `transactions.code` landt.
+  Zonder item_id is die code het enige haakje om de regel later alsnog te koppelen; leeg
+  laten mag. Bij een gezochte kaart vullen we `code` met de set-code van het item.
 - **Dagtotaal** bovenaan: som per `type` over `datum = vandaag` binnen het event
   ("€X in · €Y uit · netto €Z"). Ververst na elke eigen invoer (`tx_versie` breekt de
   cache open); invoer van een collega komt binnen de TTL van 20 s mee.
@@ -50,12 +55,20 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
   - *Per kaart* — als de kaart een `comp_prijs` heeft: snelknoppen 70/75/80 % plus een
     vrij %-veld. Bedrag = comp × % afgerond op hele euro's (half naar boven), daarna
     gewoon te overschrijven. Geen comp → geen rekenhulp, zelf intikken.
-  - *Totaal* — kaarten (uit de database of vrij getypt) op een stapeltje, dan één
-    totaalbedrag. Dat wordt **één** transactie: `item_id=NULL`, `flag='stapel'`,
-    `ruwe_tekst = "Stapel N kaarten: naam · naam · …"`. Losse prijzen bewaren we niet.
+  - *Totaal* — kaarten (uit de database of vrij getypt, met optionele code) op een
+    stapeltje: teller "Stapel: N kaarten", elke regel is zelf de verwijderknop, en één
+    totaalbedrag onderaan. Dat wordt **één** transactie: `item_id=NULL`, `flag='stapel'`,
+    `ruwe_tekst = "Stapel N kaarten: naam [code] · naam · …"`. Losse prijzen bewaren
+    we niet — het totaal is leidend.
 - **Undo**: verwijdert na bevestiging de laatste transactie die *deze sessie* zelf heeft
   weggeschreven (`mijn_invoeren` houdt de eigen insert-id's bij). Nooit die van een
   collega, ook niet als die van hen recenter is.
+- **Kleur per modus**: VASTLEGGEN en de actieve toggle zijn groen bij verkoop en TC-rood
+  bij inkoop (`MODUS_KLEUR`). De modus staat al in `session_state` vóór het script draait,
+  dus die CSS zit in hetzelfde `<style>`-blok als `BASIS_CSS` — één element, geen extra
+  witruimte. Een uitgeschakelde knop blijft grijs (`:not(:disabled)`).
+- Thema staat in `.streamlit/config.toml` (light vastgezet, TC-rood als `primaryColor`).
+  Streamlit leest dat uit de werkmap van de app — op Streamlit Cloud is dat de repo-root.
 - Schrijven kent géén automatische retry (dubbele boeking is erger dan een foutmelding);
   bij een fout blijft de invoer op het scherm staan. Lezen retryt één keer.
 - Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
@@ -87,6 +100,17 @@ RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.co
 key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
+
+## Fase-status (13-08-2026, tweede ronde)
+
+- ✅ Vrije invoer heeft een eigen code-veld (→ `transactions.code`, migratie 003 is op
+  Supabase toegepast; 130 rijen ongemoeid).
+- ✅ Stapel-modus zichtbaar gemaakt: teller, lijst met verwijderregels, codes mee in
+  `ruwe_tekst`. UI opgeschoond: kleur per modus, rustiger terzijdes, brand-thema.
+- ✅ `tests/test_beurs_app.py` draait nu 110 checks + een scenario-verslag (de vier
+  vragen uit de opdracht, met de weggeschreven databaserij erbij).
+- Bekend en bedoeld: het dagtotaal leest uit een cache van 20 s. Je eigen invoer breekt
+  die cache open (direct bij), invoer van een collega volgt binnen 20 s.
 
 ## Fase-status (13-08-2026)
 

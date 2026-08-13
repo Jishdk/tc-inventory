@@ -9,6 +9,7 @@ dagtotaal, de inkoop-rekenhulp, de stapel (totaal-modus) en undo.
 """
 
 import datetime
+import logging
 import re
 import sqlite3
 import sys
@@ -16,6 +17,11 @@ import tempfile
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
+
+# Buiten een echte server logt Streamlit bij elke run "missing ScriptRunContext"
+# en "No runtime found"; dat is hier normaal en maakt het verslag onleesbaar.
+# Streamlit zet de niveaus van zijn eigen loggers zelf, dus dit moet globaal.
+logging.disable(logging.WARNING)
 
 # Python 3.12 heeft geen standaard date/time-adapters meer voor SQLite;
 # Postgres (de echte database) heeft dit niet nodig.
@@ -38,7 +44,7 @@ CREATE TABLE transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, item_id INTEGER,
     bron_rij INTEGER, datum DATE NOT NULL, tijd TIME, kanaal TEXT NOT NULL,
     type TEXT NOT NULL, bedrag NUMERIC, afzender TEXT, media_file TEXT,
-    flag TEXT, ruwe_tekst TEXT);
+    flag TEXT, ruwe_tekst TEXT, code TEXT);
 """
 
 # Zoals de echte data: lege set_code komt voor (187 van 572) en namen zijn dubbel (54x).
@@ -103,7 +109,158 @@ def rijen(engine):
     with engine.connect() as c:
         return c.execute(text(
             "SELECT id, event_id, item_id, datum, tijd, kanaal, type, bedrag, "
-            "afzender, flag, ruwe_tekst FROM transactions ORDER BY id")).mappings().all()
+            "afzender, flag, ruwe_tekst, code FROM transactions "
+            "ORDER BY id")).mappings().all()
+
+
+def toon(rij) -> str:
+    """Eén transactieregel zoals hij in de database staat."""
+    return (f"id={rij['id']}  type={rij['type']}  bedrag={float(rij['bedrag']):.2f}  "
+            f"item_id={rij['item_id']}  flag={rij['flag']!r}  code={rij['code']!r}\n"
+            f"                 ruwe_tekst={rij['ruwe_tekst']!r}")
+
+
+def kop(nummer: str, vraag: str, verwacht: str):
+    print(f"\n{nummer} {vraag}")
+    print(f"   verwacht : {verwacht}")
+
+
+def uitkomst(*regels):
+    for i, regel in enumerate(regels):
+        print(("   resultaat: " if i == 0 else "              ") + regel)
+
+
+def scenarios(AppTest, db):
+    """Vier scenario's die de vragen uit de opdracht beantwoorden, met een
+    leesbaar 'verwacht → resultaat' per stap. Draait op een eigen verse
+    database, zodat de bedragen in het verslag niet door de rookproef lopen."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("TESTVERSLAG — scenario's")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    # --- 1. meerdere kaarten in één stapel-transactie ----------------------
+    kop("1.", "Kan ik meerdere kaarten in één stapel-transactie zetten?",
+        "3 kaarten toevoegen → 1 inkoop-rij van €185, namen + codes bewaard")
+    at.session_state["modus"] = "INKOOP"
+    at.session_state["inkoop_modus"] = "Totaal"
+    at.run()
+    at.text_input(key="stapel_zoek").set_value("umbreon vmax").run()
+    at.button(key=knoppen(at, "add_")[0].key).click().run()
+    at.text_input(key="stapel_zoek").set_value("charizard").run()
+    at.button(key=knoppen(at, "add_")[0].key).click().run()
+    at.text_input(key="stapel_vrij").set_value("Bulk commons ±200 kaarten").run()
+    at.text_input(key="stapel_code").set_value("diverse").run()
+    at.button(key="stapel_vrij_knop").click().run()
+    check(len(at.session_state["stapel"]) == 3, "scenario 1: 3 kaarten in de stapel")
+    check("(3)" in at.button(key="stapel_vastleggen").label,
+          "scenario 1: knop toont het aantal")
+    at.number_input(key="totaal_bedrag").set_value(185.0).run()
+    at.button(key="stapel_vastleggen").click().run()
+
+    r = rijen(engine)
+    check(len(r) == 1, "scenario 1: precies één transactie")
+    check(r and float(r[0]["bedrag"]) == 185.0 and r[0]["type"] == "inkoop",
+          "scenario 1: inkoop van €185")
+    check(r and r[0]["item_id"] is None and r[0]["flag"] == "stapel",
+          "scenario 1: item_id NULL, flag 'stapel'")
+    check(r and all(x in r[0]["ruwe_tekst"] for x in
+                    ("Umbreon VMAX", "EVS 215", "Charizard ex", "OBF 223",
+                     "Bulk commons", "diverse")),
+          "scenario 1: alle namen én codes staan in ruwe_tekst")
+    uitkomst(f"{len(r)} rij in de database", toon(r[0]))
+    check(at.session_state["stapel"] == [], "scenario 1: stapel leegt zichzelf")
+    uitkomst("stapel na vastleggen: leeg") if not at.session_state["stapel"] else None
+
+    # --- 2. vrije invoer met code -----------------------------------------
+    kop("2.", "Belandt de code van een vrij ingevoerde kaart in de code-kolom?",
+        "naam 'Mew ex promo' + code '151/165' → code-kolom gevuld, item_id NULL")
+    at.session_state["modus"] = "VERKOOP"
+    at.run()
+    at.text_input(key="vrij_naam").set_value("Mew ex promo").run()
+    at.text_input(key="vrij_code").set_value("151/165").run()
+    at.number_input(key="vrij_bedrag").set_value(275.0).run()
+    at.button(key="vrij_knop").click().run()
+
+    r = rijen(engine)
+    vrij = r[-1]
+    check(vrij["code"] == "151/165", "scenario 2: code in de code-kolom")
+    check(vrij["ruwe_tekst"] == "Mew ex promo", "scenario 2: naam in ruwe_tekst")
+    check(vrij["item_id"] is None and vrij["flag"] == "vrij ingevoerd",
+          "scenario 2: item_id NULL, flag 'vrij ingevoerd'")
+    check(vrij["type"] == "verkoop", "scenario 2: staat als verkoop geboekt")
+    uitkomst(toon(vrij))
+
+    # --- 3. percentage-rekenhulp ------------------------------------------
+    kop("3.", "Rekent de percentage-hulp goed, en kan ik het bedrag overschrijven?",
+        "comp €120 × 80% = €96; daarna handmatig €92 → €92 in de database")
+    at.session_state["modus"] = "INKOOP"
+    at.session_state["inkoop_modus"] = "Per kaart"
+    at.run()
+    at.text_input(key="zoekterm").set_value("charizard").run()
+    at.button(key=knoppen(at, "pick_")[0].key).click().run()
+    at.button(key="pct_80").click().run()
+    berekend = at.number_input(key="bedrag").value
+    check(berekend == 96.0, f"scenario 3: 80% van €120 = €96 (kreeg {berekend})")
+    at.number_input(key="bedrag").set_value(92.0).run()
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    check(float(r[-1]["bedrag"]) == 92.0, "scenario 3: overschreven bedrag opgeslagen")
+    uitkomst(f"knop 80% vulde €{berekend:.2f} in, daarna handmatig €92,00",
+             toon(r[-1]))
+
+    # --- 4. dagtotaal + undo ----------------------------------------------
+    kop("4.", "Klopt het dagtotaal, en draait undo mijn eigen laatste invoer terug?",
+        "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn €92 "
+        "en laat hun €50 staan")
+    voor_collega = dagtotaal(at)
+    check(voor_collega == "Vandaag: €275 in · €277 uit · netto −€2",
+          f"scenario 4: eigen invoer telt direct mee ({voor_collega!r})")
+
+    at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at2.run()
+    at2.text_input(key="zoekterm").set_value("umbreon v").run()
+    at2.button(key=knoppen(at2, "pick_")[0].key).click().run()
+    at2.number_input(key="bedrag").set_value(50.0).run()
+    at2.button(key="vastleggen").click().run()
+
+    # Bewust gedrag: de balk leest uit een cache van 20 s, dus de invoer van een
+    # collega hoeft niet meteen zichtbaar te zijn. Je eigen invoer wél — die
+    # breekt de cache open. Zodra je zelf iets doet (hieronder: undo) staat het
+    # totaal weer helemaal bij.
+    at.run()
+    check(dagtotaal(at) == voor_collega,
+          f"scenario 4: invoer van een collega volgt binnen de cache-TTL "
+          f"({dagtotaal(at)!r})")
+    uitkomst(f"direct na eigen invoer  : {voor_collega}",
+             f"vlak na invoer collega  : {dagtotaal(at)}  "
+             f"(cache van 20 s — nog niet ververst)")
+
+    at.button(key="undo").click().run()
+    check(any("92" in w.value for w in at.warning),
+          f"scenario 4: bevestiging noemt de eigen laatste invoer "
+          f"({[w.value for w in at.warning]})")
+    at.button(key="undo_ja").click().run()
+    r = rijen(engine)
+    bedragen = [float(x["bedrag"]) for x in r]
+    check(bedragen == [185.0, 275.0, 50.0],
+          f"scenario 4: eigen €92 weg, €50 van de collega blijft ({bedragen})")
+    check(dagtotaal(at) == "Vandaag: €325 in · €185 uit · netto €140",
+          f"scenario 4: dagtotaal loopt terug ({dagtotaal(at)!r})")
+    uitkomst(f"bevestiging             : {at.session_state['bevestiging']}",
+             f"rijen na undo           : {bedragen}",
+             f"dagtotaal na undo       : {dagtotaal(at)}  "
+             f"(325 in = eigen 275 + collega 50; 185 uit = de stapel)")
+    print()
 
 
 def main():
@@ -180,6 +337,7 @@ def main():
         check(t["afzender"] == "TC", "afzender vast op 'TC'")
         check(t["item_id"] is not None, "item_id gekoppeld")
         check(t["ruwe_tekst"] == "Umbreon VMAX (Alternate Art)", "ruwe_tekst = officiële naam")
+        check(t["code"] == "EVS 215", f"code van de gezochte kaart bewaard ({t['code']!r})")
         check(t["event_id"] == ev[0][0], "gekoppeld aan het beurs-event")
         check(t["datum"] is not None and t["tijd"] is not None, "datum + tijd gevuld")
 
@@ -238,8 +396,9 @@ def main():
     at.button(key="deselect").click().run()
     check(len(rijen(engine)) == 2, "rekenen schrijft niets weg")
 
-    # --- vangnet: vrij invoeren ------------------------------------------
+    # --- vangnet: vrij invoeren, mét losse code --------------------------
     at.text_input(key="vrij_naam").set_value("Japanse Eevee Heroes booster box").run()
+    at.text_input(key="vrij_code").set_value("s6a").run()
     at.number_input(key="vrij_bedrag").set_value(275.0).run()
     at.button(key="vrij_knop").click().run()
     r = rijen(engine)
@@ -249,7 +408,9 @@ def main():
         check(v["item_id"] is None, "vrije invoer heeft item_id NULL")
         check(v["flag"] == "vrij ingevoerd", "flag = 'vrij ingevoerd'")
         check(v["ruwe_tekst"] == "Japanse Eevee Heroes booster box", "ruwe_tekst = ingetypte naam")
+        check(v["code"] == "s6a", f"losse code in de code-kolom ({v['code']!r})")
         check(v["afzender"] == "TC", "vrije invoer heeft afzender 'TC'")
+    check(at.text_input(key="vrij_code").value == "", "code-veld leeg na vastleggen")
 
     # --- bedrag 0 wordt geweigerd ----------------------------------------
     at.session_state["modus"] = "VERKOOP"
@@ -299,11 +460,18 @@ def main():
     at.text_input(key="stapel_zoek").set_value("charizard").run()
     at.button(key=knoppen(at, "add_")[0].key).click().run()
     at.text_input(key="stapel_vrij").set_value("Stapeltje commons").run()
+    at.text_input(key="stapel_code").set_value("bulk").run()
     at.button(key="stapel_vrij_knop").click().run()
     check([k["naam"] for k in at.session_state["stapel"]] ==
           ["Umbreon VMAX (Alternate Art)", "Charizard ex (Special Illustration)",
            "Stapeltje commons"],
           f"drie kaarten in de stapel ({at.session_state['stapel']})")
+    check([k["code"] for k in at.session_state["stapel"]] ==
+          ["EVS 215", "OBF 223", "bulk"],
+          f"codes meegenomen in de stapel ({[k['code'] for k in at.session_state['stapel']]})")
+    check(any('class="tc-teller"' in m.value and ">3</b> kaarten" in m.value
+              for m in at.markdown),
+          "teller boven de lijst telt mee")
 
     at.button(key="weg_1").click().run()
     check([k["naam"] for k in at.session_state["stapel"]] ==
@@ -326,8 +494,9 @@ def main():
         check(s["item_id"] is None, "stapel hangt aan geen enkel los item")
         check(s["flag"] == "stapel", "flag = 'stapel'")
         check(s["ruwe_tekst"] == "Stapel 2 kaarten: Umbreon VMAX (Alternate Art) "
-                                 "· Stapeltje commons",
-              f"kaartnamen bewaard in ruwe_tekst ({s['ruwe_tekst']})")
+                                 "[EVS 215] · Stapeltje commons [bulk]",
+              f"namen én codes bewaard in ruwe_tekst ({s['ruwe_tekst']})")
+        check(s["code"] is None, "stapel zelf heeft geen losse code")
     check(at.session_state["stapel"] == [], "stapel leeg na vastleggen")
     check(dagtotaal(at) == "Vandaag: €470 in · €485 uit · netto −€15",
           f"dagtotaal telt de stapel mee ({dagtotaal(at)!r})")
@@ -366,6 +535,8 @@ def main():
     check([float(x["bedrag"]) for x in r] == [430.0, 60.0, 40.0, 25.0],
           f"tweede undo pakt de eigen vorige invoer (€275), niet die van de collega "
           f"({[float(x['bedrag']) for x in r]})")
+
+    scenarios(AppTest, db)
 
     # --- schrijffout: invoer blijft behouden ------------------------------
     kapot = create_engine("postgresql+psycopg2://x:y@127.0.0.1:1/none",
