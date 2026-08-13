@@ -33,14 +33,29 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
 
 - `streamlit run beurs_app.py` (poort 8501/8502). Rookproef zonder DB:
   `python tests/test_beurs_app.py` — draait de app headless via `streamlit.testing`
-  tegen een SQLite-schaduwschema.
+  tegen een SQLite-schaduwschema (86 checks).
 - Eén gedeelde gebruiker: `afzender` staat vast op `"TC"` (constante `AFZENDER`).
   Geen naamkeuze — bewust weggehaald, scheelt een scherm per invoer.
 - UI is mobiel-first en leunt op Streamlit's `st-key-<key>`-classes voor CSS
-  (zoekresultaten `pick_<id>`, `bedrag`, `vastleggen`). De tweede regel in een
-  resultaatknop komt van `\n` + `white-space: pre-line`; het grijze deel is `:gray[…]`.
+  (zoekresultaten `pick_<id>`/`add_<id>`, `bedrag`, `vastleggen`). De tweede regel in
+  een resultaatknop komt van `\n` + `white-space: pre-line`; het grijze deel is
+  `:gray[…]`. Streamlit stapelt kolommen onder telefoonbreedte — daarom staat er een
+  `flex-wrap: nowrap` op `stHorizontalBlock` (anders valt de rekenhulp uit elkaar).
 - Schrijft **alleen** naar `transactions`; nooit afboeken op `items` (bewuste scope-grens).
 - Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte naam.
+- **Dagtotaal** bovenaan: som per `type` over `datum = vandaag` binnen het event
+  ("€X in · €Y uit · netto €Z"). Ververst na elke eigen invoer (`tx_versie` breekt de
+  cache open); invoer van een collega komt binnen de TTL van 20 s mee.
+- **Inkoop** kent twee manieren (`inkoop_modus`), verkoop blijft ongewijzigd snel:
+  - *Per kaart* — als de kaart een `comp_prijs` heeft: snelknoppen 70/75/80 % plus een
+    vrij %-veld. Bedrag = comp × % afgerond op hele euro's (half naar boven), daarna
+    gewoon te overschrijven. Geen comp → geen rekenhulp, zelf intikken.
+  - *Totaal* — kaarten (uit de database of vrij getypt) op een stapeltje, dan één
+    totaalbedrag. Dat wordt **één** transactie: `item_id=NULL`, `flag='stapel'`,
+    `ruwe_tekst = "Stapel N kaarten: naam · naam · …"`. Losse prijzen bewaren we niet.
+- **Undo**: verwijdert na bevestiging de laatste transactie die *deze sessie* zelf heeft
+  weggeschreven (`mijn_invoeren` houdt de eigen insert-id's bij). Nooit die van een
+  collega, ook niet als die van hen recenter is.
 - Schrijven kent géén automatische retry (dubbele boeking is erger dan een foutmelding);
   bij een fout blijft de invoer op het scherm staan. Lezen retryt één keer.
 - Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
@@ -72,6 +87,15 @@ RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.co
 key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
+
+## Fase-status (13-08-2026)
+
+- ✅ Beurs-app uitgebreid: live dagtotaal, inkoop-rekenhulp (%-knoppen) + stapel op
+  totaalbedrag, en undo van de eigen laatste invoer. Tests: 86 checks groen.
+- ✅ Screenshots op telefoonformaat in `screenshots/` (1-start, 2-inkoop-rekenhulp,
+  3-inkoop-percentage, 4-inkoop-stapel, 5-undo).
+- Bewust *niet* gebouwd: bod-/voorstel-status (de deal is rond bij invoer), afboeken op
+  `items` (wacht op de nieuwe database) en een winkelmandje voor verkoop.
 
 ## Fase-status (10-08-2026)
 
