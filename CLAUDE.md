@@ -88,6 +88,30 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
   bij een fout blijft de invoer op het scherm staan. Lezen retryt één keer.
 - Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
 
+## Aansluiting met het Dashboard-tabblad (v6)
+
+Gecontroleerd op 15-08-2026: **alle geldbedragen sluiten tot op de euro aan** op het
+Dashboard in `inventaris_datav2.xlsx` — voorraadwaarde €102.748, verkoopwaarde €109.959,
+marge €7.211, 1231 stuks, 22 verkocht, en de verdeling per categorie en taal.
+
+Wat je moet weten om die getallen te lezen:
+
+- **Verkoopwaarde** (kolom P) = `aantal × comp prijs`, en waar comp leeg is
+  `aantal × cm prijs`. Precies dezelfde terugval als in de app. Puur de echte
+  comp-prijzen zijn €75.680; de rest (€34.279) komt van rijen zonder comp.
+- **Comp prijs** (kolom N) is een opslagladder op de cm-prijs (tot €350:
+  `CEILING(cm × 1,15; 5)`), maar begint met `IF(OR(E="Slab"; E="Sealed"; M=""); "")`.
+  Dus: **slabs worden nooit gecompt** (alle 64 hebben nog de formule), bij Sealed zijn er
+  28 met de hand ingevuld, en singles onder €5 krijgen bewust geen comp.
+- **Unieke items: dashboard 601, database 599.** Het dashboard telt
+  `COUNTIF(A:A;"?*")-1`: dat telt de 3 `[ place holder ]`-regels mee (tekst) en mist de
+  rij waar de naam per ongeluk het getal `46` is (`"?*"` matcht geen getallen). De import
+  doet het omgekeerd. 601 − 3 + 1 = 599. Geen van die 5 rijen heeft een prijs, dus de
+  bedragen blijven gelijk.
+- **"Nog niet gecompt": dashboard 44, database 41** — zelfde 3 placeholders.
+- ⏳ Open: bronrij 603 heeft als naam het getal `46` (code 118/086, cm €46, comp €56,
+  uitverkocht). Echte kaartnaam onbekend; staat nu als "46" in de zoeklijst van de app.
+
 ## Kanaal-mapping (transactions)
 
 Bron kent 2 WhatsApp-kanalen. `sales` → kanaal `verkoop`, `inkoop` → `inkoop`. Zo klopt
