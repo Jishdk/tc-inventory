@@ -18,12 +18,23 @@ Pipeline voor inventaris- en beursadministratie:
   (`aws-0-<regio>.pooler.supabase.com:5432`, IPv4). `src/db.py` parst de DSN zelf
   (wachtwoord met speciale tekens) en dwingt `sslmode=require` af.
 - Migraties: `python src/migrate.py` (draait `migrations/*.sql`, idempotent).
-- Tabellen: `events`, `items` (572 rijen), `transactions` (130), `price_points` (leeg,
-  voor latere prijs-sync), `match_voorstellen` (Sessie A).
+- Tabellen: `events`, `items` (599 rijen, v6-inventaris), `transactions` (130),
+  `price_points` (leeg, voor latere prijs-sync), `match_voorstellen` (Sessie A).
 - `transactions.code` is toegevoegd in `003_transactions_code.sql` (13-08-2026) voor de
   vrije invoer van de beurs-app; bestaande rijen houden `NULL`.
-- Imports: `src/import_inventory.py`, `src/import_transactions.py` — idempotent via
+- `004_items_v6_kolommen.sql` (15-08-2026) voegt `vorig_aantal`, `verkocht`, `status` en
+  `vintage_modern` toe aan `items`. Voorraad-/verkoopwaarde slaan we niet op: formules.
+- **Let op bij vervangen van `items`:** `transactions.item_id`, `price_points.item_id` én
+  `match_voorstellen.voorgesteld_item_id` zijn foreign keys. Die laatste stond op 65 rijen
+  gevuld en blokkeert een DELETE; de importer zet 'm op NULL (voorstelregels blijven).
+- Imports: `src/import_inventory.py` (v5), `src/import_transactions.py` — idempotent via
   `bron_rij` (positie in bronbestand; er zijn dubbele naam+code-combinaties).
+- **`src/import_inventory_v2.py`** — leest het v6-bestand (`inventaris_datav2.xlsx`) en
+  *vervangt* de items-tabel in één transactie (`--dry-run` toont eerst wat er gebeurt).
+  Prijzen zijn formules → `data_only=True`; codes als getal (46.0) worden "46"; rijen
+  zonder naam en `[ place holder ]`-regels worden overgeslagen; `aantal` leeg = 0.
+  Verrijking (`officiele_naam`, `set_code`, `cardmarket_id`, `match_status`) wordt op
+  naam+code uit de oude tabel overgenomen — die zit niet in het Excel-bestand.
 - Dashboard: `streamlit run app.py` → http://localhost:8501 (3 tabs: Overzicht,
   Inventaris, Transacties). Validatie tegen referentie verkoop €16.768 / inkoop €3.619.
 
@@ -48,6 +59,10 @@ verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
   naam, plus een **los code-veld** (`173/195`, `swsh260`) dat in `transactions.code` landt.
   Zonder item_id is die code het enige haakje om de regel later alsnog te koppelen; leeg
   laten mag. Bij een gezochte kaart vullen we `code` met de set-code van het item.
+- **Prijs in de app** = `comp_prijs`, en waar die leeg is `prijs_cm`, met " cm" achter het
+  bedrag. Nodig sinds de v6-inventaris: alle 64 slabs en een deel van sealed/singles
+  hebben alléén een cm-prijs (120 items) en toonden anders "€ ?" bij juist de dure
+  voorraad. Voorinvullen bij verkoop en de %-rekenhulp gebruiken dezelfde werkprijs.
 - **Dagtotaal** bovenaan: som per `type` over `datum = vandaag` binnen het event
   ("€X in · €Y uit · netto €Z"). Ververst na elke eigen invoer (`tx_versie` breekt de
   cache open); invoer van een collega komt binnen de TTL van 20 s mee.
@@ -84,7 +99,10 @@ De aard per regel (verkoop/inkoop/trade) staat in kolom `type`.
 
 | Bestand | Beschrijving |
 |---|---|
-| `TC_Inventaris_v5.xlsx` | Bron-inventaris (sheet "Inventaris", 572 regels) |
+| `inventaris_datav2.xlsx` | **Actuele bron-inventaris v6** (sheet "Inventaris", 599 items) |
+| `TC_Inventaris_v5.xlsx` | Vorige bron-inventaris (sheet "Inventaris", 572 regels) |
+| `items_backup_voor_import.csv` | Items-tabel zoals hij vóór de v6-import was (572 rijen) |
+| `match_voorstellen_backup_voor_import.csv` | Match-voorstellen mét de oude item-koppeling |
 | `inventaris_verrijkt_v2.csv` | Verrijkte identiteit (na 2e pass): 367 zeker, 81 twijfel, 72 jp, 26 geen_match_naam, 18 zeker_prijs, 8 geen_match |
 | `twijfel_singles.csv` / `twijfel_later.csv` | Handmatig na te lopen twijfelgevallen (15 singles-met-code / 66 rest) |
 | `match_voorstellen_rapport.txt` | Meetrapport Sessie A (foto → match) |
@@ -100,6 +118,20 @@ RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.co
 key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
+
+## Fase-status (15-08-2026 — beursdag Nijmegen)
+
+- ✅ v6-inventaris geïmporteerd: **599 items** (500 single, 64 Slab, 32 Sealed, 3 zonder
+  categorie), 592 op voorraad + 7 uitverkocht. Voorraadwaarde (cm × aantal) €102.747.
+  Overgeslagen: 2 naamloze rijen en 3 `[ place holder ]`-regels.
+- ✅ 478 van de 599 items hebben hun verrijking behouden (officiele_naam/set_code/
+  cardmarket_id op naam+code overgenomen); 323 hebben nu een officiële naam.
+- ✅ Backups vóór de vervanging: `data/items_backup_voor_import.csv` en
+  `data/match_voorstellen_backup_voor_import.csv`.
+- ✅ Beurs-app draait op de nieuwe tabel; sealed komt met prijs terug. Eén fix nodig:
+  terugval op `prijs_cm` (zie hierboven), anders stond er "€ ?" bij alle slabs.
+- ⏳ Sessie B: `match_voorstellen.voorgesteld_item_id` is losgekoppeld (staat in de
+  backup-CSV met naam/code, dus opnieuw te koppelen tegen de nieuwe item-id's).
 
 ## Fase-status (13-08-2026, tweede ronde)
 

@@ -64,6 +64,16 @@ ITEMS = [
     ("Bulbasaur ruilbak", "Bulbasaur", "001", "BS 001", "single", "MP", None, None),
 ]
 
+# Zoals de v6-inventaris: slabs hebben géén comp_prijs, alleen een cm-prijs, en
+# sealed staat zonder officiele_naam/set_code in de tabel.
+# onze_naam, code, categorie, staat, grade, comp_prijs, prijs_cm
+ALLEEN_CM = [
+    ("Pika van Gogh", None, "Slab", "NM", "PSA 9", None, 852.00),
+    ("Shining Gyarados", None, "Slab", "NM", "PSA 8", None, 2300.00),
+    ("Moltres UPC", None, "Sealed", "NM", None, None, 330.00),
+    ("151 ETB", None, "Sealed", "NM", None, 500.00, 475.00),
+]
+
 fouten = []
 
 
@@ -102,6 +112,12 @@ def maak_engine():
                 "VALUES (:a,:b,:c,:d,:e,:f,:g,:h)"),
                 {"a": onze, "b": off, "c": code, "d": setc, "e": cat, "f": staat,
                  "g": grade, "h": prijs})
+        for naam, code, cat, staat, grade, comp, cm in ALLEEN_CM:
+            c.execute(text(
+                "INSERT INTO items (onze_naam, code, categorie, staat, grade, "
+                "comp_prijs, prijs_cm) VALUES (:a,:b,:c,:d,:e,:f,:g)"),
+                {"a": naam, "b": code, "c": cat, "d": staat, "e": grade,
+                 "f": comp, "g": cm})
     return engine
 
 
@@ -315,6 +331,28 @@ def main():
           f"staat/grade scheidt gelijknamige kaarten ({labels})")
     check(labels and "300.00" in labels[0],
           f"duurste variant staat bovenaan bij gelijke naam ({labels})")
+
+    # --- slabs/sealed zonder comp_prijs: terugval op de cm-prijs -----------
+    at.text_input(key="zoekterm").set_value("pika van gogh").run()
+    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    check(labels and "852.00" in labels[0],
+          f"slab zonder comp toont de cm-prijs ({labels})")
+    check(labels and "cm" in labels[0],
+          f"cm-prijs is als zodanig gelabeld, niet als comp ({labels})")
+    at.text_input(key="zoekterm").set_value("moltres").run()
+    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    check(labels and "330.00" in labels[0] and "€ ?" not in labels[0],
+          f"sealed zonder comp toont de cm-prijs ({labels})")
+    at.text_input(key="zoekterm").set_value("151 etb").run()
+    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    check(labels and "500.00" in labels[0] and " cm" not in labels[0],
+          f"comp gaat vóór cm en krijgt geen cm-label ({labels})")
+
+    at.text_input(key="zoekterm").set_value("shining gyarados").run()
+    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
+    check(at.number_input(key="bedrag").value == 2300.00,
+          f"verkoop vult de cm-prijs voor (kreeg {at.number_input(key='bedrag').value})")
+    at.button(key="deselect").click().run()
 
     at.text_input(key="zoekterm").set_value("umbreon vmax").run()
     at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()

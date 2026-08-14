@@ -245,10 +245,17 @@ TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
 def laad_items() -> pd.DataFrame:
     df = lees("""
         SELECT id, onze_naam, officiele_naam, code, set_code, categorie, staat,
-               grade, comp_prijs
+               grade, comp_prijs, prijs_cm
         FROM items ORDER BY officiele_naam NULLS LAST, onze_naam
     """)
-    df["comp_prijs"] = pd.to_numeric(df["comp_prijs"], errors="coerce")
+    for kolom in ("comp_prijs", "prijs_cm"):
+        df[kolom] = pd.to_numeric(df[kolom], errors="coerce")
+    # Werkprijs: comp waar die er is, anders de Cardmarket/eBay-prijs. Slabs en
+    # een deel van de sealed hebben namelijk alléén prijs_cm — zonder deze
+    # terugval staat er "€ ?" bij juist de duurste voorraad.
+    df["prijs"] = df["comp_prijs"].where(df["comp_prijs"].notna(), df["prijs_cm"])
+    df["prijs_bron"] = df["comp_prijs"].notna().map({True: "comp", False: "cm"})
+    df.loc[df["prijs"].isna(), "prijs_bron"] = None
     # Lege tekstvelden naar None: pandas' NaN is truthy, dus `x or y` zou anders
     # "nan" op het scherm zetten (187 items hebben geen set_code).
     for kol in TEKSTKOLOMMEN:
@@ -342,7 +349,7 @@ def zoek(df: pd.DataFrame, term: str) -> pd.DataFrame:
     treffers = df[masker].copy()
     # Naam die met de zoekterm begint eerst — dat is meestal wat je bedoelt.
     treffers["_start"] = ~treffers["naam"].map(normaliseer).str.startswith(tokens[0])
-    return treffers.sort_values(["_start", "naam", "comp_prijs"],
+    return treffers.sort_values(["_start", "naam", "prijs"],
                                 ascending=[True, True, False])
 
 
@@ -358,7 +365,10 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
     treffers = zoek(df, term)
     with st.container(key=container_key):
         for _, r in treffers.head(MAX_RESULTATEN).iterrows():
-            prijs = f"€{r['comp_prijs']:,.2f}" if pd.notna(r["comp_prijs"]) else "€ ?"
+            # "cm" erachter als het geen comp-prijs is: anders lijkt een
+            # Cardmarket-prijs op een afgesproken verkoopprijs.
+            prijs = (f"€{r['prijs']:,.2f}" + (" cm" if r["prijs_bron"] == "cm" else "")
+                     if pd.notna(r["prijs"]) else "€ ?")
             detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs] if x)
             # Zachte regelafbreking (\n) + CSS `white-space: pre-line` geeft de
             # tweede regel; :gray[] maakt er een span van die klein wordt gezet.
@@ -373,7 +383,8 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
 def als_dict(r) -> dict:
     return {"id": int(r["id"]), "naam": r["naam"], "kenmerk": kenmerk(r),
             "conditie": conditie(r),
-            "comp_prijs": None if pd.isna(r["comp_prijs"]) else float(r["comp_prijs"])}
+            "prijs": None if pd.isna(r["prijs"]) else float(r["prijs"]),
+            "prijs_bron": r["prijs_bron"]}
 
 
 # ------------------------------------------------------------------ sessie
@@ -409,11 +420,11 @@ def init_state():
 
 
 def prefill_bedrag():
-    """Bij verkoop de comp_prijs voorinvullen, bij inkoop leeg (0,00)."""
+    """Bij verkoop de bekende prijs voorinvullen, bij inkoop leeg (0,00)."""
     sel = st.session_state.get("sel")
     prijs = 0.0
-    if sel and st.session_state["modus"] == "VERKOOP" and sel.get("comp_prijs"):
-        prijs = float(sel["comp_prijs"])
+    if sel and st.session_state["modus"] == "VERKOOP" and sel.get("prijs"):
+        prijs = float(sel["prijs"])
     st.session_state["bedrag"] = prijs
     st.session_state["eigen_pct"] = None
 
@@ -431,9 +442,9 @@ def reken_percentage(pct: float):
     Zet alleen de waarde van het bedrag-veld: daarna is het gewoon weer een
     invoerveld, dus altijd met de hand te overschrijven."""
     sel = st.session_state.get("sel")
-    if not sel or not sel.get("comp_prijs") or not pct:
+    if not sel or not sel.get("prijs") or not pct:
         return
-    st.session_state["bedrag"] = float(math.floor(sel["comp_prijs"] * pct / 100 + 0.5))
+    st.session_state["bedrag"] = float(math.floor(sel["prijs"] * pct / 100 + 0.5))
 
 
 def reken_eigen_percentage():
@@ -658,9 +669,10 @@ else:
 
     # rekenhulp: alleen bij inkoop, en alleen als er een comp-prijs is om
     # vanaf te rekenen. Geen comp → gewoon het bedrag intikken.
-    if MODUS == "INKOOP" and sel and sel.get("comp_prijs"):
-        comp = float(sel["comp_prijs"])
-        st.markdown(f'<div class="tc-comp">comp €{geld(comp)} — betaald:</div>',
+    if MODUS == "INKOOP" and sel and sel.get("prijs"):
+        comp = float(sel["prijs"])
+        label = "comp" if sel.get("prijs_bron") == "comp" else "cm"
+        st.markdown(f'<div class="tc-comp">{label} €{geld(comp)} — betaald:</div>',
                     unsafe_allow_html=True)
         kolommen = st.columns([1, 1, 1, 1.3], vertical_alignment="center")
         for kolom, pct in zip(kolommen, PERCENTAGES):
