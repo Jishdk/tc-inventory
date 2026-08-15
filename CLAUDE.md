@@ -18,8 +18,9 @@ Pipeline voor inventaris- en beursadministratie:
   (`aws-0-<regio>.pooler.supabase.com:5432`, IPv4). `src/db.py` parst de DSN zelf
   (wachtwoord met speciale tekens) en dwingt `sslmode=require` af.
 - Migraties: `python src/migrate.py` (draait `migrations/*.sql`, idempotent).
-- Tabellen: `events`, `items` (599 rijen, v6-inventaris), `transactions` (130),
-  `price_points` (leeg, voor latere prijs-sync), `match_voorstellen` (Sessie A).
+- Tabellen: `events`, `items` (720 rijen, v7-inventaris), `transactions` (246: 130 uit
+  juli + 116 van Cardmaniacs), `price_points` (leeg, voor latere prijs-sync),
+  `match_voorstellen` (Sessie A).
 - `transactions.code` is toegevoegd in `003_transactions_code.sql` (13-08-2026) voor de
   vrije invoer van de beurs-app; bestaande rijen houden `NULL`.
 - `004_items_v6_kolommen.sql` (15-08-2026) voegt `vorig_aantal`, `verkocht`, `status` en
@@ -123,7 +124,12 @@ De aard per regel (verkoop/inkoop/trade) staat in kolom `type`.
 
 | Bestand | Beschrijving |
 |---|---|
-| `inventaris_datav2.xlsx` | **Actuele bron-inventaris v6** (sheet "Inventaris", 599 items) |
+| `TC_Inventaris_v7.xlsx` | **Actuele bron-inventaris v7** (sheet "Inventaris", 720 items) |
+| `backup/transactions_voor_opschoning.csv` | Transacties vóór de opschoning van 16-08 (246) |
+| `backup/items_voor_opschoning.csv` | Items vóór de v7-import (599) |
+| `dubbelingen_rapport.txt` | Voorstel dubbele beursverkopen (nog te bevestigen) |
+| `niet_gekoppelde_sales.csv` | Beursregels zonder `item_id`, handmatig te koppelen |
+| `inventaris_datav2.xlsx` | Vorige bron-inventaris v6 (sheet "Inventaris", 599 items) |
 | `TC_Inventaris_v5.xlsx` | Vorige bron-inventaris (sheet "Inventaris", 572 regels) |
 | `items_backup_voor_import.csv` | Items-tabel zoals hij vóór de v6-import was (572 rijen) |
 | `match_voorstellen_backup_voor_import.csv` | Match-voorstellen mét de oude item-koppeling |
@@ -142,6 +148,65 @@ RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.co
 key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
+
+## Opschoning na de beurs (16-08-2026)
+
+Drie stappen: v7 importeren, verkopen ontdubbelen, verkopen afboeken. **Stap 1 is klaar,
+stap 2 ligt bij Jishnu, stap 3 wacht daarop.**
+
+- ✅ **Backups vooraf**: `data/backup/transactions_voor_opschoning.csv` (246 rijen) en
+  `data/backup/items_voor_opschoning.csv` (599 rijen).
+- ✅ **v7 geïmporteerd** — `src/import_inventory_v3.py` met `data/TC_Inventaris_v7.xlsx`:
+  **720 items**, 1358 stuks, voorraadwaarde €112.417,55, verkoopwaarde €120.920,60.
+  Sluit tot op de cent aan op het Dashboard-tabblad. Overgeslagen: 3 placeholders,
+  192 voorgevulde lege regels (naamloos, Aantal 1) en 74 lege rijen.
+  Dashboard telt 722 unieke items: dat is 720 + 3 placeholders − 1 rij met een getal
+  als naam (`"?*"` matcht geen getallen) — zelfde rekensom als bij v6.
+- **Waarom een v3 naast v2:** sinds de beurs hangen er 104 transacties met een foreign
+  key aan `items`. De DELETE+INSERT van v2 loopt daarop stuk, en zou alle verkopen hun
+  kaartkoppeling kosten. v3 zet de nieuwe rijen erin, *hernummert* `transactions.item_id`,
+  `price_points.item_id` en `match_voorstellen.voorgesteld_item_id` naar de nieuwe id's,
+  en ruimt dan pas de oude op — alles in één transactie. Alle 104 koppelingen zijn
+  behouden (0 verloren; gecontroleerd tegen de backup-CSV).
+  - Koppelen gaat op naam+code mét volgnummer: die sleutel is niet uniek (23 combinaties
+    komen 2x voor in v7), anders klappen dubbele regels op één id samen.
+  - `bron_rij` is UNIQUE en oud en nieuw gebruiken dezelfde rijnummers → de oude rijen
+    krijgen eerst `bron_rij = NULL` (ze verdwijnen toch aan het eind van de transactie).
+  - `RETURNING` levert bij een executemany geen rijen; de nieuwe id's komen via `bron_rij`.
+- ⏳ **Ontdubbelen ligt stil op verzoek** — `data/dubbelingen_rapport.txt`
+  (`python src/dubbelingen.py`, leest alleen). Voorstel: 10 van de 113 verkopen zijn
+  dubbel (€1.288). Jishnu wil eerst met het team overleggen; er is **niets gewijzigd**.
+  Zijn keuzes voor straks: **markeren met `flag = 'dubbel'`, niet verwijderen**, en de
+  13 cent-regels blijven staan en worden **wel** afgeboekt.
+- ⏳ **Afboeken staat klaar, niet uitgevoerd** — `src/afboeken_sales.py` (dry-run tenzij
+  `--uitvoeren`) en `migrations/005_transactions_afgeboekt.sql` (kolom `afgeboekt_op`,
+  nog **niet** toegepast op Supabase). Zonder dat stempel is afboeken niet te herhalen.
+  Het script slaat `flag = 'dubbel'` over, boekt 1 stuk per verkoopregel af, laat
+  `vorig_aantal` met rust en verwijdert nooit een item (aantal mag naar 0 of negatief).
+  Inkopen blijven buiten schot: die zitten al in het v7-bestand.
+- `data/niet_gekoppelde_sales.csv` — 12 regels zonder `item_id` (9 verkopen à €1.030 en
+  3 inkopen, waaronder de stapel van €2.100). Handmatig te koppelen; niet raden.
+
+### Wat het dubbelingen-rapport gebruikt als bewijs
+
+Snelheid alleen zegt niets: de kleinste tussenpoos tussen twee *verschillende* kaarten is
+1-2 seconden (het team tikt een stapeltje achter elkaar in), mediaan 29 s. Wel bewijs:
+
+- **voorraad 1 en twee keer verkocht** — kan per definitie niet.
+- **vrije invoer twee keer binnen 20 s** — die naam is niet zo snel opnieuw te typen.
+- **herhaalde reeks**: om 21:10–21:12 zijn 7 kaarten opnieuw ingevoerd in exact dezelfde
+  volgorde als om 10:37–10:40. Eén regel kan toeval zijn, zeven niet.
+
+Bewust *niet* als dubbeling geteld: losse boosterpakjes (Prismatic €15, Twilight €10) en
+3× Mega Dream €95 binnen 80 s — daar ligt 14 tot 32 stuks van, twee klanten met hetzelfde
+pakje ziet er precies zo uit.
+
+- ⚠️ **Alle 116 beursregels staan op 15-08; er is geen enkele regel op 16-08.** De
+  avondinvoer van 21:13–21:25 lijkt dag 2 die 's avonds is bijgeschreven op de datum van
+  invoer (de app zet `datum` = dag van invoer).
+- ✅ Beurs-app gecontroleerd op de nieuwe tabel: `tests/test_beurs_app.py` groen, en live
+  tegen Supabase 720 items geladen, zoeken/prijzen/dagtotaal werken (54 items hebben geen
+  comp én geen cm-prijs en tonen "€ ?").
 
 ## Fase-status (15-08-2026 — beursdag Nijmegen)
 
