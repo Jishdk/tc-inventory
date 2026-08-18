@@ -168,21 +168,105 @@ dubbele invoer staat er nog en is gemarkeerd. Backups vóór elke stap in `data/
 (`*_20260817_2214.csv` en `*_20260818_2043_voor_afboeken.csv`), plus de vorige v7 als
 `TC_Inventaris_v7_20260817_2214_voor_vervanging.xlsx`.
 
-### Eindstand (na de tweede v7-ronde van 18-08 21:00)
+### Eindstand — opschoning afgerond 18-08-2026
 
 | | |
 |---|---|
-| `items` | **793**, 1379 stuks na afboeken (1581 ervoor) |
-| voorraadwaarde (CM) | **€110.092,90** — vóór afboeken €120.523,55 |
-| verkoopwaarde (comp) | €121.909,90 — vóór afboeken €133.271,60 |
-| items zonder enige prijs | **73** (was 126; prijzen bijgewerkt in v7) |
-| uitverkocht / negatief | 86 / 5 |
+| `items` | **763**, 1410 stuks na afboeken (1620 in v7) |
+| voorraadwaarde (CM) | **€111.266,65** |
+| verkoopwaarde (comp) | €123.179,65 |
+| items zonder enige prijs | 64 |
+| uitverkocht / **negatief** | 88 / **0** |
 | `transactions` | 362 totaal; event 3 = **232** regels, 116 op 15-08 en 116 op 16-08 |
-| afgeboekt | **194 regels = 202 stuks over 113 kaarten** |
-| netto omzet event 3 | verkoop **€12.529,08** (205 regels) · inkoop €2.240,00 (3 regels) |
+| gekoppeld | 212 van 362 |
+| afgeboekt | **202 regels = 210 stuks over 116 kaarten** |
+| netto omzet event 3 | verkoop **€12.524,08** (204 regels) · inkoop €2.240,00 (3 regels) |
 
 De omzet is een eigenschap van `transactions` en verandert dus niet mee met een
-v7-ronde — alleen de voorraadkant beweegt.
+v7-ronde of een koppeling — alleen de voorraadkant beweegt. Wat de omzet *wel*
+verandert is een nieuwe dubbelmarkering: de €12.529,08 werd €12.524,08 toen Ho-oh
+#307 als dubbele tik werd gemarkeerd.
+
+**Database en v7 sluiten rij voor rij aan.** Gecontroleerd over alle 763 rijen:
+`items.aantal` = v7-aantal − afgeboekte stuks, met **0 afwijkingen** (1620 − 210 = 1410).
+Die reconciliatie is de beste eindcontrole na een ronde — hij vangt zowel een
+mislukte koppeling als een dubbele afboeking.
+
+### Duplicaten opgeruimd in v7 (18-08)
+
+30 dubbele rijen samengevoegd: de rij met de hoogste prijs blijft, het aantal van de
+dubbel gaat erbij op, en de dubbel wordt **leeggemaakt in plaats van verwijderd**.
+793 → 763 kaarten. Bewust blijven staan: 6 taalverschillen (EN naast JP), 3
+conditieverschillen en 2 paren met een groot prijsgat — dat zijn aparte kaarten.
+
+Twee dingen die daarbij makkelijk misgaan:
+
+- **De importer koppelt op naam+code mét volgnummer.** Smelt een paar samen tot één
+  rij, dan bestaat het 2e voorkomen niet meer en verliezen de transacties die daaraan
+  hingen hun kaart. Verleg die eerst naar het item met de **laagste `bron_rij`** — dat
+  is het 1e voorkomen, en dat wordt de samengevoegde rij.
+- **Een xlsx bewerken met openpyxl wist alle gecachete formulewaarden.** Zonder
+  LibreOffice (staat niet op deze machine) kan niets ze terugrekenen en leest de
+  importer overal `comp_prijs = NULL`. Bewerk het bestand daarom op XML-niveau
+  (`zipfile` + gerichte tekstvervanging): formules, caches, opmaak en het
+  Dashboard-tabblad blijven dan intact. Zet `fullCalcOnLoad="1"` in `<calcPr>` zodat
+  Excel het Dashboard bijwerkt zodra het bestand opengaat.
+- Rijen leegmaken in plaats van verwijderen scheelt het verschuiven van gedeelde
+  formulebereiken (`<f t="shared" ref="L2:L343">`). Let op: sommige voorgevulde rijen
+  hebben in L en Q een **vaste waarde** in plaats van een formule — die moeten ook
+  leeg, anders blijft er "Op voorraad" hangen op een rij die niet meer bestaat.
+
+### Koppelen van vrije invoer (18-08)
+
+Van de 27 losse verkopen zijn er **9 automatisch gekoppeld** (€980) volgens drie regels:
+exacte code, óf een naam die precies één item aanwijst, óf een expliciete afspraak met
+het team. Tikfouten worden opgevangen door dubbele letters te laten vallen
+(`twillight` → `twilight`) en met een `difflib`-drempel van 0,88.
+
+Twee filters die het verschil maken tussen koppelen en gokken:
+
+- **Staat er een code op de regel, dan moet het item exact die code hebben.** Een item
+  *zonder* code telt niet als bevestiging — bij veertien Pikachu's pikt dat er willekeurig
+  een uit (dat gebeurde met "Pikachu" → "Pikachu 160").
+- **Onderscheidende woorden** (`promo`, `sleeved`, `psa`, `etb`, `case`, `display`,
+  `bundle`, `tin`, …) in de vrije tekst die niet in de itemnaam staan, blokkeren de
+  koppeling: een promo is niet de gewone kaart. Haal die woorden uit de **ruwe** tekst,
+  niet uit de genormaliseerde — de normalisatie gooit "promo" er zelf al uit.
+
+De overige **18 regels** (€937 verkoop + €2.240 inkoop) dragen
+`opschoon_notitie = 'niet gekoppeld - handmatig'` en staan in
+`data/nog_te_koppelen.csv`. Ze **tellen mee in de omzet** — het waren echte verkopen —
+alleen de voorraadafboeking ontbreekt.
+
+### v7 is de waarheid — de database is afgeleid
+
+`items` = v7-voorraad **min** de afboeking. Die relatie is reproduceerbaar
+(importeren → `afgeboekt_op` resetten → afboeken), dus koppelingen en verleggingen
+hoeven **niet** terug in v7; die leven in `transactions` en overleven een import.
+Voorraad*fouten* horen wél in v7, anders komen ze bij de volgende import gewoon terug.
+
+De laatste twee negatieve standen zijn zo opgelost:
+
+- **Ho-oh 140/195 (EN)** — v7 zei 1, er stonden 2 verkopen. #307 (51 s na #306, zelfde
+  bedrag) is als dubbele tik gemarkeerd. Staat nu op 0.
+- **Pikachu 173/165 (JP)** — v7 had een leeg aantal (= 0) terwijl er 1 verkocht was.
+  Het aantal is **in de v7-Excel** op 1 gezet, niet in de database. Staat nu op 0.
+
+⚠️ **De Tangela-koppeling hangt aan de rijvolgorde in v7.** Beide Tangela-rijen (EN rij
+134, JP rij 477) hebben dezelfde naam+code, dus de importer onderscheidt ze alleen op
+volgorde. De twee verkopen staan nu op de EN-rij (het 1e voorkomen). Verplaats of
+hersorteer die rijen niet zonder daarna te controleren of de verkopen nog op de EN-kant
+staan. Bij Moltres speelt dit niet: daar verschillen de namen ("… Articuno" tegen
+"… Articuno GX").
+
+### Nog open na de opschoning
+
+- `data/nog_te_koppelen.csv` — 18 regels (€937 verkoop + €2.240 inkoop) die niet
+  eenduidig te koppelen waren. Ze tellen mee in de omzet; alleen de voorraadafboeking
+  ontbreekt. Onder andere de 3 inkopen (waaronder de stapel van €2.100), 3× Pitch Black
+  Pokémon Center, de twee Charmleon-promo's à €1,00 en "Gem pack vol 4".
+- `data/twijfel_opschoning.csv` — de resterende vragen uit de eerste ronde.
+- Sessie B: `match_voorstellen.voorgesteld_item_id` staat nog los.
 
 Bruto stond er €13.879,21 aan verkoop; daar gaat €1.350 aan gemarkeerde dubbelingen af
 en €0,13 aan workaround-regels.
