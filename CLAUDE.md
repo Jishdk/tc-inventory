@@ -161,6 +161,98 @@ key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
 
+## Beurscyclus — de vaste procedure na elke beurs
+
+De Excel is de waarheid, de database is werkgeheugen. Een beurs loopt daarom in een
+rondje: Excel erin → verkopen eraf → resultaat terug in de Excel. Na die laatste stap
+is de Excel de eindstand van deze beurs én de beginstand van de volgende, en klopt hij
+weer precies met de database.
+
+```
+   TC_Inventaris_v7.xlsx  (beginstand)
+            |  1. importeren
+            v
+        items-tabel  ──── 2. beurs-app schrijft naar transactions
+            |  3. markeren (dubbel / workaround / stuks)
+            |  4. afboeken
+            v
+     items = beginstand - verkopen
+            |  5. terugschrijven
+            v
+   TC_Inventaris_v7.xlsx  (eindstand = beginstand volgende beurs)
+```
+
+**0. Backup.** `transactions` + `items` naar `data/backup/` met een timestamp in de
+naam, en een kopie van de Excel. Elke stap hieronder is te herhalen; alleen stap 5 niet,
+en juist daarom is de backup daar het belangrijkst.
+
+**1. Nieuwe kaarten in de Excel, dan importeren.**
+`python src/import_inventory_v3.py --dry-run` en controleer dat er **`zonder tegenhanger
+in v7: 0`** staat. Staat daar een getal, dan is er een kaart hernoemd of samengevoegd —
+zoek uit welke en vraag het na vóór je iets in `HERNOEMD` zet. Daarna zonder `--dry-run`.
+
+**2. Beurs.** De app schrijft naar `transactions`. Meer hoeft er tijdens de beurs niet.
+
+**3. Opschonen — dit kost de meeste tijd, en hoort met de hand.**
+- datums controleren: alles moet op een beursdag staan, niet op de dag van invoer;
+- dubbele invoer markeren met `is_dubbel` + een reden in `opschoon_notitie`;
+- `stuks` invullen waar één regel meerdere kaarten dekt;
+- €0,01-regels markeren als `workaround-afboeking`;
+- vrije invoer koppelen waar het eenduidig is, de rest markeren.
+
+**4. Afboeken.** `python src/afboeken_sales.py --event N --dry-run`, kijken of het klopt,
+dan `--uitvoeren`. Moest je stap 1 opnieuw doen, reset dan eerst `afgeboekt_op`:
+`UPDATE transactions SET afgeboekt_op = NULL WHERE event_id = N;` — de import heeft de
+voorraad immers teruggezet.
+
+**5. Terugschrijven naar de Excel.** Neem `items.aantal` over in kolom Aantal, en zet
+**Vorig aantal gelijk aan Aantal**. Daardoor wordt `Verkocht = MAX(vorig − huidig; 0)`
+weer 0 en begint de volgende beurs schoon. Wat er verkocht is blijft bewaard in
+`transactions` — de Excel hoeft dat niet ook te onthouden.
+
+**6. Controleren.** Rij voor rij: Excel-Aantal == database-aantal, over álle kaarten.
+Een totaal dat toevallig klopt zegt niets; deze controle vangt zowel een mislukte
+koppeling als een dubbele afboeking.
+
+### De twee dingen die hier echt fout kunnen gaan
+
+⚠️ **Na stap 5 nooit meer afboeken over diezelfde beurs.** De afboeking zit dan in de
+Excel verwerkt. `afgeboekt_op` opnieuw op NULL zetten en het script nog eens draaien
+haalt dezelfde stuks er een tweede keer af, en dat is aan de standen niet te zien.
+Vuistregel: `afgeboekt_op` reset je alleen tussen stap 1 en 4, nooit erna.
+
+⚠️ **Bewerk de xlsx nooit met openpyxl-save.** Dat wist alle gecachete formulewaarden,
+en zonder LibreOffice (staat niet op deze machine) krijgt niets ze terug — de importer
+leest dan overal `comp_prijs = NULL`. Bewerk het bestand op XML-niveau (`zipfile` +
+gerichte vervanging), laat de `<f>`-elementen staan en werk alleen de `<v>` bij. Zet
+`fullCalcOnLoad="1"` in `<calcPr>` zodat Excel het Dashboard bijwerkt bij openen.
+Let op dat sommige rijen in L, O, P en Q een **vaste waarde** hebben in plaats van een
+formule — behandel beide gevallen.
+
+Kleinere valkuilen, allemaal een keer misgegaan:
+
+- **Item-id's verschuiven bij elke import** (de tabel wordt vervangen en hernummerd).
+  Verwijs naar kaarten met naam+code, nooit met een id.
+- De importer koppelt op naam+code **mét volgnummer**. Voeg je twee rijen samen, verleg
+  dan eerst de transacties naar het item met de **laagste `bron_rij`**.
+- `NULL LIKE '%x%'` is NULL, en `NOT NULL` is NULL. Filter dus met
+  `coalesce(opschoon_notitie,'') LIKE …`, anders vallen alle regels zonder notitie weg.
+- Staat er een code op een transactieregel, koppel dan alleen aan een item met exact die
+  code. Een item *zonder* code is geen bevestiging — bij veertien Pikachu's pikt dat er
+  willekeurig een uit.
+
+### Terugschrijven, uitgevoerd op 18-08-2026
+
+De afboeking van Cardmaniacs staat nu in `data/TC_Inventaris_v7.xlsx`: 763 kaarten,
+**1407 stuks**, voorraadwaarde **€111.238,65**, verkoopwaarde €123.139,65. Op 116 rijen
+ging het aantal omlaag (Prismatic booster 52 → 14, Snorlax 34 → 20, Mew 17 → 7). Vorig
+aantal is overal gelijkgetrokken en Verkocht staat overal op 0. Rij voor rij
+gecontroleerd tegen de database: **0 afwijkingen op 763 kaarten**.
+
+De beginstand van vóór de beurs staat als
+`TC_Inventaris_v7_beginstand_voor_Cardmaniacs.xlsx` naast het bestand, en in
+`data/backup/TC_Inventaris_v7_20260818_2230_voor_afboekterugschrijf.xlsx`.
+
 ## Opschoning uitgevoerd (18-08-2026) — de grote sessie
 
 De database is opgeschoond en de beursverkopen zijn afgeboekt. **Er is niets verwijderd:**
