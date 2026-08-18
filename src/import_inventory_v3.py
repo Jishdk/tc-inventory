@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -89,9 +90,17 @@ VERWIJZERS = [
 
 def tekst(waarde) -> str | None:
     """Celwaarde naar nette tekst. Getallen die eigenlijk een code zijn (46.0)
-    worden "46" — anders zoekt niemand ze ooit terug."""
+    worden "46" — anders zoekt niemand ze ooit terug.
+
+    Excel maakt van een kaartcode als "9/12" soms een datum. Die schrijven we als
+    "2026-12-09" weg: lelijk, maar wél zichtbaar fout, zodat iemand hem repareert.
+    Zelf gokken kan niet — 9/12 en 12/9 leveren dezelfde cel op."""
     if waarde is None:
         return None
+    if isinstance(waarde, datetime.datetime):
+        waarde = waarde.date()
+    if isinstance(waarde, datetime.date):
+        return waarde.isoformat()
     if isinstance(waarde, float) and waarde.is_integer():
         waarde = int(waarde)
     schoon = str(waarde).strip()
@@ -112,8 +121,19 @@ def getal(waarde) -> float | None:
         return None
 
 
+# Kaarten die tussen twee versies zijn hernoemd. Zonder deze lijst raken de
+# transacties die aan de oude naam hangen hun koppeling kwijt en worden ze nooit
+# afgeboekt. Sleutel en waarde zijn allebei (naam, code) in kleine letters.
+# Alleen invullen na bevestiging door het team — dit is geen gokwerk.
+HERNOEMD = {
+    # 17-08-2026, bevestigd door Jishnu: zelfde Sealed-product, beide voorraad 14.
+    ("prismatic booster pack", ""): ("prismatic booster", ""),
+}
+
+
 def basissleutel(naam, code) -> tuple[str, str]:
-    return (str(naam or "").strip().lower(), str(code or "").strip().lower())
+    sl = (str(naam or "").strip().lower(), str(code or "").strip().lower())
+    return HERNOEMD.get(sl, sl)
 
 
 def nummer_sleutels(paren) -> list[tuple[str, str, int]]:

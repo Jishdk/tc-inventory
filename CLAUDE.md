@@ -124,20 +124,32 @@ De aard per regel (verkoop/inkoop/trade) staat in kolom `type`.
 
 | Bestand | Beschrijving |
 |---|---|
+Opgeruimd op 17-08-2026: alles wat verouderd was staat in `../_archief/opruiming_2026-08-17/`
+(niets verwijderd). Wat daar heen ging: `TC_Inventaris_v5.xlsx`, `inventaris_datav2.xlsx`
+(v6), `inventaris_verrijkt.csv` (1e pass), `match_rapport.txt`, `twijfel_handmatig.csv`,
+`_transacties_v2.csv`, de juli-zips `inkoop27072026.zip` / `sales27072026.zip`, en
+`dubbel_van_archief/{_sales,_inkoop}` — die twee mappen waren byte-voor-byte dezelfde
+138/108 bestanden als `_archief/_sales` en `_archief/_inkoop`.
+
+| Bestand | Beschrijving |
+|---|---|
 | `TC_Inventaris_v7.xlsx` | **Actuele bron-inventaris v7** (sheet "Inventaris", 720 items) |
+| `salestrade1516augustus2026.zip` + map | WhatsApp-export Sales & trades t/m 16-08 (308 media) |
+| `inkoop1516augustus2026.zip` + map | WhatsApp-export Inkoop t/m 16-08 (137 media) |
 | `backup/transactions_voor_opschoning.csv` | Transacties vóór de opschoning van 16-08 (246) |
 | `backup/items_voor_opschoning.csv` | Items vóór de v7-import (599) |
-| `dubbelingen_rapport.txt` | Voorstel dubbele beursverkopen (nog te bevestigen) |
+| `dubbelingen_rapport.txt` | Voorstel dubbele beursverkopen — **verouderd**, kent alleen de 116 regels van 15-08 |
 | `niet_gekoppelde_sales.csv` | Beursregels zonder `item_id`, handmatig te koppelen |
-| `inventaris_datav2.xlsx` | Vorige bron-inventaris v6 (sheet "Inventaris", 599 items) |
-| `TC_Inventaris_v5.xlsx` | Vorige bron-inventaris (sheet "Inventaris", 572 regels) |
-| `items_backup_voor_import.csv` | Items-tabel zoals hij vóór de v6-import was (572 rijen) |
-| `match_voorstellen_backup_voor_import.csv` | Match-voorstellen mét de oude item-koppeling |
+| `_sales_v2` / `_inkoop_v2` | Juli-media; `transactions.media_file` wijst hierheen — **niet verplaatsen** |
 | `inventaris_verrijkt_v2.csv` | Verrijkte identiteit (na 2e pass): 367 zeker, 81 twijfel, 72 jp, 26 geen_match_naam, 18 zeker_prijs, 8 geen_match |
 | `twijfel_singles.csv` / `twijfel_later.csv` | Handmatig na te lopen twijfelgevallen (15 singles-met-code / 66 rest) |
 | `match_voorstellen_rapport.txt` | Meetrapport Sessie A (foto → match) |
-| `inkoop27072026.zip`, `sales27072026.zip` | WhatsApp-exports (v2 = mét media, uitgepakt in `_inkoop_v2`/`_sales_v2`) |
 | `_cmapi_rapid_cache.json` | Cache API-searches (bewaren) |
+| `whatsapp-chats/` | Leeg; ooit bedoeld als losse chatmap |
+
+De augustus-exports zijn geen superset van de juli-media: 84 bestanden uit `_sales_v2` en
+42 uit `_inkoop_v2` zitten er niet in (WhatsApp exporteert maar een venster terug). Beide
+paren mappen blijven dus nodig.
 
 `inventory/data/`: transactie-CSV's (`_clean` is definitief) + `_vision_findings.json`
 (121 handmatig/visueel gelezen beursfoto's, keyed op bestandsnaam — input voor match_foto).
@@ -148,6 +160,246 @@ RapidAPI "Cardmarket API TCG" (tcggopro), host `cardmarket-api-tcg.p.rapidapi.co
 key `CMAPI_KEY` in `../.env` (Pro-tier 3.000/dag). Geen NL-prijsveld; wel
 `lowest_near_mint` + DE/FR/ES/IT + `30d_average`. (`CMAPI_LIVE_KEY` = cardmarketapi.com
 trial, niet meer gebruikt.)
+
+## Opschoning uitgevoerd (18-08-2026) — de grote sessie
+
+De database is opgeschoond en de beursverkopen zijn afgeboekt. **Er is niets verwijderd:**
+dubbele invoer staat er nog en is gemarkeerd. Backups vóór elke stap in `data/backup/`
+(`*_20260817_2214.csv` en `*_20260818_2043_voor_afboeken.csv`), plus de vorige v7 als
+`TC_Inventaris_v7_20260817_2214_voor_vervanging.xlsx`.
+
+### Eindstand (na de tweede v7-ronde van 18-08 21:00)
+
+| | |
+|---|---|
+| `items` | **793**, 1379 stuks na afboeken (1581 ervoor) |
+| voorraadwaarde (CM) | **€110.092,90** — vóór afboeken €120.523,55 |
+| verkoopwaarde (comp) | €121.909,90 — vóór afboeken €133.271,60 |
+| items zonder enige prijs | **73** (was 126; prijzen bijgewerkt in v7) |
+| uitverkocht / negatief | 86 / 5 |
+| `transactions` | 362 totaal; event 3 = **232** regels, 116 op 15-08 en 116 op 16-08 |
+| afgeboekt | **194 regels = 202 stuks over 113 kaarten** |
+| netto omzet event 3 | verkoop **€12.529,08** (205 regels) · inkoop €2.240,00 (3 regels) |
+
+De omzet is een eigenschap van `transactions` en verandert dus niet mee met een
+v7-ronde — alleen de voorraadkant beweegt.
+
+Bruto stond er €13.879,21 aan verkoop; daar gaat €1.350 aan gemarkeerde dubbelingen af
+en €0,13 aan workaround-regels.
+
+### Nieuwe kolommen (`migrations/006_transactions_opschoning.sql`)
+
+- `is_dubbel` (bool, default false) — per ongeluk twee keer ingevoerd. Telt niet mee in de
+  omzet en wordt niet afgeboekt.
+- `opschoon_notitie` (text) — waaróm een regel bijzonder is. Vaste waarden die de scripts
+  kennen: `workaround-afboeking` en `aantal-correctie: N stuks`.
+- `stuks` (int, NULL = 1) — hoeveel kaarten één regel dekt. Alleen gevuld na bevestiging.
+- `afgeboekt_op` (uit 005, nu pas toegepast) — maakt afboeken herhaalbaar. Tweede run
+  levert "0 regels" op; gecontroleerd.
+
+⚠️ **`coalesce(opschoon_notitie,'') LIKE …`** gebruiken bij het filteren. `NULL LIKE …` is
+NULL en `NOT NULL` is NULL, dus zonder coalesce vallen álle regels zonder notitie weg —
+dat gaf hier eerst een omzet van €4.714 in plaats van €12.529.
+
+### Wat er is gebeurd, stap voor stap
+
+1. **v7 opnieuw geïmporteerd** uit `/mnt/c/Users/jishn/Documents/Projects/TraderCollective/`.
+   794 items, 718/794 verrijking behouden, **alle 203 transactie-koppelingen overleefd**.
+   Sluit tot op de cent aan op het Dashboard-tabblad.
+   - `import_inventory_v3.py` kreeg een **`HERNOEMD`-tabel**: "Prismatic Booster Pack" is in
+     v7 hernoemd naar "Prismatic booster", waardoor 36 verkopen hun koppeling verloren.
+     Alleen invullen na bevestiging door het team — dit is geen gokwerk.
+   - `tekst()` snapt nu datums: Excel had van Togepi's kaartcode `2026-12-09` gemaakt.
+     Die schrijven we zichtbaar-fout weg in plaats van te raden tussen 9/12 en 12/9.
+   - De `slab`→`Slab`-fix was niet meer nodig; die stond al goed in het nieuwe bestand.
+2. **Datums**: 68 regels stonden op 17-08 — dat was de inhaalslag van dag 2, in één batch
+   ingevoerd tussen 19:10 en 19:45. Verzet naar 16-08, met de reden in `opschoon_notitie`.
+   Binnen event 3 staat nu **niets meer buiten 15/16 augustus**.
+3. **11 regels gemarkeerd als dubbel** (€1.350). Zie hieronder wat wél en niet als bewijs telt.
+4. **13 regels als `workaround-afboeking`** (€0,13): 12x Snorlax direct na de verkoop van
+   €270 en 1x Magikarp. Geen omzet, wél afgeboekt — dat is precies de bedoeling.
+5. **Mew #496 op `stuks = 9`**: 9x Mew 205/165 samen voor €205. Bedrag is het totaal, niet
+   per stuk. `afboeken_sales.py` telt `coalesce(stuks,1)` en haalt er dus 9 van de voorraad.
+6. **Afgeboekt** met `--uitvoeren`. 27 regels zonder `item_id` (€4.157) zijn niet afgeboekt
+   en staan in `data/niet_gekoppelde_sales.csv` — niet geraden.
+
+### Wat als bewijs telde voor een dubbeling
+
+Tijdsafstand alleen zegt niets, en op 16-08 19:10–19:45 al helemaal niet: daar is alles in
+één batch nagevoerd, dus 7 seconden tussen twee Prismatic-verkopen is normaal tempo. Wel
+gemarkeerd:
+
+- **Exact dezelfde seconde**: #272 Dewgong, #415 Pikachu.
+- **Identieke vrije tekst binnen 2 s** — die typ je niet zo snel opnieuw: #324, #314.
+- **Herhaalde reeks**: #296–#302 (15-08 10:37–10:40) is 's avonds om 21:10–21:12 opnieuw
+  ingevoerd als #352–#358. Zeven kaarten in exact dezelfde volgorde. Zes bedragen identiek.
+- **Pikachu 160/159**: #299 (€34) en #355 (€58) hangen aan hetzelfde item 4725. Jishnu heeft
+  bevestigd dat **#355 de echte is** en #299 de dubbele. Let op de valstrik: €58 is exact de
+  comp-prijs van dat item, dus het voorgevulde bedrag — dat maakte het lastig te lezen.
+
+Bewust *niet* gemarkeerd, door Jishnu bevestigd als echt: de 36 Prismatic-verkopen, 3x
+Pitch Black Pokémon Center à €125 en 3x Phanatasamal booster à €12.
+
+### Negatieve voorraad is bewust
+
+Vijf items staan onder nul. Dat is een melding, geen fout: het getal zegt hoeveel er meer
+verkocht is dan v7 wist. Ophogen in de database zou afwijken van het Excel-bestand — en de
+volgende import gooit dat toch weg, want `items` wordt volledig vervangen. Corrigeren doe
+je in v7, dan opnieuw importeren, dan afboeken.
+
+| Item | Stand | Verkocht |
+|---|---|---|
+| 5680 Prismatic booster | **−22** | 36 (v7 zegt nog steeds 14) |
+| 5517 Moltres & Zapdos & Articuno SM210 | −1 | 2 |
+| 5646 Tangela 178/165 (JP) | −1 | 2 |
+| 5771 Pikachu 173/165 (JP) | −1 | 1 (v7 stond al op 0) |
+| 5171 Ho-oh 140/195 | −1 | 2 |
+
+De item-id's verschuiven bij elke import (de tabel wordt vervangen en hernummerd) —
+verwijs naar kaarten met naam+code, niet met een id. Na de v7-ronde van 18-08 21:00
+staan deze vijf nog steeds negatief: die aantallen zijn in v7 nog niet gecorrigeerd.
+
+### Een verse v7 importeren en opnieuw afboeken
+
+De volgorde is dwingend en `afgeboekt_op` moet ertussen gereset worden:
+
+1. Backup (`transactions` + `items`) met timestamp naar `data/backup/`.
+2. `cp` de nieuwe v7 uit `/mnt/c/Users/jishn/Documents/Projects/TraderCollective/`; zet de
+   oude eerst apart in `data/backup/`.
+3. `python src/import_inventory_v3.py --dry-run` → controleer "zonder tegenhanger in v7: 0".
+   Staat daar een getal, dan is er een kaart hernoemd; zoek uit welke en vraag het na
+   vóór je iets in `HERNOEMD` zet.
+4. `python src/import_inventory_v3.py`.
+5. **`UPDATE transactions SET afgeboekt_op = NULL WHERE event_id = 3;`** — de items-tabel is
+   vervangen, dus geen enkele voorraadstand draagt nog een afboeking. Zonder deze reset
+   slaat de volgende ronde alles over en blijft de voorraad op de v7-stand staan.
+6. `python src/afboeken_sales.py --event 3 --dry-run`, dan `--uitvoeren`.
+
+`is_dubbel`, `opschoon_notitie`, `stuks` en `afgeboekt_op` staan alle vier in
+`transactions` en géén ervan in `items` — de items-vervanging raakt ze dus niet. Het enige
+wat de importer aan `transactions` doet is `item_id` hernummeren.
+
+### Open: `data/twijfel_opschoning.csv` (22 gevallen)
+
+Niets daarvan is gemarkeerd of gewijzigd. Vier soorten: **7x v7 opschonen** (39 naam+code-
+combinaties staan dubbel in v7, vaak één rij mét en één zonder prijs — o.a. Greninja
+swsh144 en Blastoise 200/165 en 2/102; plus code `116/086` op twee namen en de
+Togepi-datumcode), **6x koppelen** (vrije invoer die aan een bestaand item hoort, zoals
+Mega Darkrai #380 waarvan de code exact matcht met item 5126), **5x voorraad te laag** (de
+negatieve standen hierboven), **2x bedrag onbekend** en **2x dubbeling?**.
+
+⏳ **Charmleon #388/#389 is bewust open gelaten.** Twee regels van €1,00 voor
+"Charmleon promo 2x", vrij ingevoerd, 1 s uit elkaar, zonder code — en er is nergens een
+bijbehorend totaalbedrag, dus dit is géén €0,01-workaroundpatroon. In v7 staat alleen
+item 5122 Charmeleon 99/97, zonder promo-vlag en zonder prijs. Zonder de echte prijs is
+elke keuze een gok, en beide regels hebben toch geen `item_id` — er wordt dus niets
+afgeboekt zolang dit open staat. Alleen de omzet staat mogelijk €2,00 te laag.
+Zelfde vraag bij #392 Jolteon Masterball €1,00.
+
+## Vastgestelde staat op 17-08-2026 (voorbereiding, niets gewijzigd)
+
+Alleen gelezen en opgeruimd. **Geen enkele databaserij aangeraakt.** Bewust nog niet
+opgeschoond: Jishnu vult zondag 16-08 eerst compleet in de app in.
+
+### Database
+
+| | |
+|---|---|
+| `items` | **720** rijen, 1358 stuks, voorraadwaarde (cm × aantal) **€112.417,55**, verkoopwaarde €120.920,60 |
+| items zonder enige prijs | 54 (tonen "€ ?" in de app) — 177 zonder comp-prijs |
+| items met aantal ≤ 0 | 8, geen enkele negatief |
+| `transactions` | **294** rijen (was 246 bij de vorige sessie) — 260 verkoop, 20 trade, 14 inkoop |
+| event 1 (juli) | 130 rijen, 25/26-07 — ongewijzigd |
+| event 3 (Cardmaniacs) | **164** rijen: 116 op 15-08, **48 op 16-08** |
+| item_id gevuld | 150 van 294 |
+
+**Er is niets half uitgevoerd van de vorige sessie.** De kolommen `is_dubbel` en
+`opschoon_notitie` bestaan niet en zijn ook nooit bedacht; `afgeboekt_op` uit
+`migrations/005_transactions_afgeboekt.sql` bestaat óók nog niet — die migratie is nog
+niet op Supabase toegepast. Geen enkele rij draagt `flag = 'dubbel'`; de flags zijn
+`vrij ingevoerd` (13), `CHECK BEDRAG` (8, juli) en `stapel` (1). Voorraad is nergens
+afgeboekt: `items.aantal` staat nog precies op de v7-stand.
+
+### De €0,01-regels zijn een aantal-workaround, geen test en geen dubbeling
+
+De app kent geen aantal per regel. Bij meerdere exemplaren van dezelfde kaart is één keer
+het **totaalbedrag** geboekt en zijn de resterende stuks als €0,01 ingevoerd, puur om ze
+uit de voorraad te krijgen. Dus: **wel afboeken van de voorraad, niet meetellen als omzet.**
+
+- 13 regels, samen €0,13, allemaal op 15-08:
+  - **12× Snorlax** (item 3984, code PR-SV SVP 051) om 15:43–15:47, direct ná #338
+    Snorlax **€270,00** om 15:43:00. Samen dus 13 stuks voor €270. Voorraad staat op 34.
+  - **1× Magikarp** (item 3701, code PAL 203) om 21:25:33.
+- `src/dubbelingen.py` behandelt alles onder €1 al apart (sectie E, "geen dubbeling") en
+  laat het buiten het schrapvoorstel. Dat klopt met de bedoeling — niets aan te passen.
+- `src/afboeken_sales.py` boekt ze wél af (1 stuk per verkoopregel met `item_id`). Ook
+  goed. Let alleen op bij **rapportage**: het regel-aantal telt ze mee, de omzet niet.
+- ⚠️ Op 16-08 staan drie regels van **exact €1,00** die er hetzelfde uitzien maar níét
+  onder de €1-drempel vallen: #388 en #389 "Charmleon promo 2x" (vrij ingevoerd, 09:23:46
+  en :47) en #392 "Jolteon Masterball" (09:57:00). Die belanden nu in de gewone
+  dubbelingen-detectie. Zelf nalopen of dit dezelfde workaround is.
+
+### WhatsApp-exports 15/16-08 (geparsed, níét geïmporteerd)
+
+`data/salestrade1516augustus2026/` en `data/inkoop1516augustus2026/`, geparsed met
+`scripts/parse_whatsapp.py --dates 15-08-2026 16-08-2026`:
+
+| Kanaal | Dag | Berichten | Met foto | Met bedrag | Som |
+|---|---|---|---|---|---|
+| Sales & trades | 15-08 | 54 | 52 | 45 | €7.757 (44 verkoop + 10 trade) |
+| Sales & trades | 16-08 | **103** | 92 | 92 | **€13.304** (80 verkoop + 16 trade) |
+| Inkoop | 15-08 | 16 | 12 | 11 | €7.087 |
+| Inkoop | 16-08 | **27** | 11 | 14 | **€7.595** |
+
+**Het gat voor 16-08 is groot.** In de app staan 48 verkoopregels voor €1.298,70, tegen
+96 WhatsApp-berichten met bedrag voor ±€13.304. De app-invoer stopt om 14:15, WhatsApp
+loopt door tot 21:32, en alles boven €160 ontbreekt. **Inkoop 16-08 staat helemaal niet
+in de app** (0 regels tegen 15 berichten). Voor 15-08 is het omgekeerd — 100 echte
+app-regels tegen 54 WhatsApp-berichten — omdat de app per kaart boekt en WhatsApp per
+klant/stapel. Die verhouding is dus geen maatstaf; het ontbreken van de dure kaarten en
+van de hele middag/avond wél.
+
+- Parser-artefact: `IMG-20260816-WA0085.jpg … 465 voor @183382302552143` levert een bedrag
+  van 183 biljoen op — `extract_amount` leest het telefoonnummer achter een @-mention.
+  Het echte bedrag is €465. Als de inkoop-import er ooit komt: @-mentions eerst strippen.
+
+### v7 is klaar voor een her-import — met twee waarschuwingen
+
+`python src/import_inventory_v3.py --dry-run` draait schoon: 720 items gelezen, 720/720
+verrijking overgenomen, en alle **150** `transactions.item_id`-koppelingen overleven het
+(0 zonder tegenhanger). Kolomkoppen zijn ongewijzigd. Nieuwe kaarten toevoegen kan dus.
+
+- **Type in de rijen 727 t/m 916.** Die staan voorgevuld klaar (Taal EN, Categorie single,
+  Staat NM, Aantal 1) *inclusief* de formules voor Comp prijs, Voorraadwaarde,
+  Verkoopwaarde en Status. De importer slaat ze over zolang kolom A leeg is. Vanaf rij 917
+  houden de formules op — daar moet je ze zelf naar beneden doortrekken, anders komt de
+  kaart zonder comp-prijs binnen.
+- **Prijzen zijn formules; de importer leest gecachte waarden** (`data_only=True`). Sla het
+  bestand dus op met Excel of LibreOffice, die herrekenen. Een editor die de formulecache
+  niet bijwerkt levert `comp_prijs = NULL` op precies de rijen die je hebt aangeraakt.
+- **Volgorde is kritiek:** `Aantal` in v7 is de voorraad *vóór* het afboeken. Importeer je
+  v7 opnieuw ná `afboeken_sales.py`, dan zet je de afboeking terug. Eerst v7, dan afboeken.
+- Kleinigheid: 1 rij heeft categorie `slab` in plaats van `Slab`. Excel trekt zich daar
+  niets van aan (`=` is hoofdletterongevoelig), de database wel — dat wordt een aparte
+  categoriewaarde. Meenemen als je toch in het bestand zit.
+- 24 naam+code-combinaties komen meer dan één keer voor (49 rijen). De importer telt het
+  hoeveelste voorkomen mee, dus dat gaat goed — zet nieuwe dubbele regels wel *onder* de
+  bestaande, niet ertussen.
+
+### Signalen om straks naar te kijken (niet aangeraakt)
+
+- 9 items zijn in de app vaker verkocht dan er op voorraad ligt. Grootste:
+  **Prismatic Booster Pack** (item 4165) — voorraad 14, 20× verkocht. Verder 7 kaarten met
+  voorraad 1 die 2× verkocht zijn (Dewgong, Tangela, Ho-oh, Wartortle, Pikachu, Moltres &
+  Zapdos & Articuno) en 2 met voorraad 0 (Pikachu 4255, Twillight Masquerade booster 4256).
+  Deels echte dubbelingen, deels voorraad die in v7 te laag staat — niet te raden.
+- 27 paren "zelfde kaart, zelfde bedrag binnen 60 s" in event 3, waarvan 13 de Snorlax- en
+  Magikarp-workaround. De rest zit vooral op boosterpakjes (Prismatic €15,
+  Phantasamal Flames €12/€14) — daar liggen er tientallen van, dus dat is waarschijnlijk
+  gewoon volume. Twee opvallende: #414/#415 Pikachu €33 op **dezelfde seconde** (11:57:52)
+  en #402/#403 Poliwhirl €14 met 1 seconde ertussen — dat ruikt naar een dubbele tik.
+- `data/dubbelingen_rapport.txt` dateert van 15-08 en kent de 48 regels van 16-08 niet.
+  Opnieuw draaien nadat de invoer compleet is.
 
 ## Opschoning na de beurs (16-08-2026)
 
@@ -177,7 +429,8 @@ stap 2 ligt bij Jishnu, stap 3 wacht daarop.**
   (`python src/dubbelingen.py`, leest alleen). Voorstel: 10 van de 113 verkopen zijn
   dubbel (€1.288). Jishnu wil eerst met het team overleggen; er is **niets gewijzigd**.
   Zijn keuzes voor straks: **markeren met `flag = 'dubbel'`, niet verwijderen**, en de
-  13 cent-regels blijven staan en worden **wel** afgeboekt.
+  13 cent-regels blijven staan en worden **wel** afgeboekt — die zijn geen dubbeling maar
+  een aantal-workaround, zie de sectie van 17-08 hierboven.
 - ⏳ **Afboeken staat klaar, niet uitgevoerd** — `src/afboeken_sales.py` (dry-run tenzij
   `--uitvoeren`) en `migrations/005_transactions_afgeboekt.sql` (kolom `afgeboekt_op`,
   nog **niet** toegepast op Supabase). Zonder dat stempel is afboeken niet te herhalen.
@@ -201,9 +454,11 @@ Bewust *niet* als dubbeling geteld: losse boosterpakjes (Prismatic €15, Twilig
 3× Mega Dream €95 binnen 80 s — daar ligt 14 tot 32 stuks van, twee klanten met hetzelfde
 pakje ziet er precies zo uit.
 
-- ⚠️ **Alle 116 beursregels staan op 15-08; er is geen enkele regel op 16-08.** De
-  avondinvoer van 21:13–21:25 lijkt dag 2 die 's avonds is bijgeschreven op de datum van
-  invoer (de app zet `datum` = dag van invoer).
+- ~~⚠️ Alle 116 beursregels staan op 15-08; de avondinvoer van 21:13–21:25 lijkt dag 2.~~
+  **Achterhaald (17-08).** Op 16-08 zijn er tijdens dag 2 zelf 48 regels bijgekomen
+  (07:59–14:15). De avondbatch van 15-08 om 21:10–21:25 *kán* geen dag 2 zijn — dag 2 was
+  toen nog niet geweest. Het is een inhaalslag van dag 1: de duurdere kaarten
+  (Pikachu €700, Umbreon €390, Mega Darkrai €300) plus de inkoopstapel van €2.100.
 - ✅ Beurs-app gecontroleerd op de nieuwe tabel: `tests/test_beurs_app.py` groen, en live
   tegen Supabase 720 items geladen, zoeken/prijzen/dagtotaal werken (54 items hebben geen
   comp én geen cm-prijs en tonen "€ ?").

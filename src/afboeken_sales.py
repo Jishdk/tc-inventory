@@ -6,8 +6,12 @@ Standaard draait dit script een **dry-run**: je ziet wat er zou gebeuren en er
 verandert niets. Pas met `--uitvoeren` gaat het echt.
 
 Wat het doet:
-- elke verkoop met een `item_id` telt voor 1 stuk (de beurs-app kent geen aantal
-  per regel; twee stuks zijn twee regels);
+- elke verkoop met een `item_id` telt voor `stuks` kaarten, en `stuks` is bijna
+  altijd NULL = 1 (de beurs-app kent geen aantal per regel; twee stuks zijn twee
+  regels). Alleen waar het team heeft bevestigd dat één regel meer kaarten dekt
+  staat er een getal, zoals de 9x Mew 205/165 die samen voor EUR 205 weggingen;
+- de EUR 0,01-regels tellen gewoon mee: dat is de andere kant van diezelfde
+  workaround. Ze halen wél een kaart uit de voorraad, maar zijn géén omzet;
 - `items.aantal` gaat omlaag, `items.verkocht` omhoog, `status` wordt opnieuw
   bepaald. Er wordt **nooit** een item verwijderd — aantal mag naar 0 of negatief,
   want een negatieve stand is informatie: dan klopt de telling niet en moet er
@@ -15,7 +19,7 @@ Wat het doet:
 - `vorig_aantal` blijft met rust: dat is de boekhouding van het Excel-bestand zelf.
 
 Wat het overslaat:
-- regels met `flag = 'dubbel'` (ontdubbeld, tellen niet mee);
+- regels met `is_dubbel` (per ongeluk twee keer ingevoerd, tellen niet mee);
 - regels die al een `afgeboekt_op` hebben (anders boek je bij een tweede ronde
   dezelfde verkoop nog eens af);
 - verkopen zonder `item_id`. Die zijn niet te raden — ze staan in
@@ -42,12 +46,13 @@ from db import get_engine, INVENTORY  # noqa: E402
 NIET_GEKOPPELD = INVENTORY.parent / "data" / "niet_gekoppelde_sales.csv"
 
 TE_BOEKEN = text("""
-    SELECT t.id, t.bedrag, t.item_id, i.onze_naam, i.code, i.aantal, i.verkocht, i.status
+    SELECT t.id, t.bedrag, t.item_id, COALESCE(t.stuks, 1) AS stuks,
+           i.onze_naam, i.code, i.aantal, i.verkocht, i.status
     FROM transactions t
     JOIN items i ON i.id = t.item_id
     WHERE t.type = 'verkoop'
       AND t.afgeboekt_op IS NULL
-      AND (t.flag IS NULL OR t.flag <> 'dubbel')
+      AND NOT t.is_dubbel
       AND (:event IS NULL OR t.event_id = :event)
     ORDER BY t.datum, t.tijd, t.id
 """)
@@ -58,7 +63,7 @@ LOSSE = text("""
     FROM transactions t
     JOIN events e ON e.id = t.event_id
     WHERE t.item_id IS NULL
-      AND (t.flag IS NULL OR t.flag <> 'dubbel')
+      AND NOT t.is_dubbel
       AND (:event IS NULL OR t.event_id = :event)
     ORDER BY t.type, t.datum, t.tijd
 """)
@@ -106,9 +111,11 @@ def main():
             it = per_item.setdefault(r["item_id"], {
                 "onze_naam": r["onze_naam"], "code": r["code"], "aantal": r["aantal"],
                 "verkocht": r["verkocht"] or 0, "status": r["status"], "n": 0})
-            it["n"] += 1
+            it["n"] += r["stuks"]
 
-        print(f"Af te boeken verkopen : {len(rijen)} regels over {len(per_item)} kaarten")
+        stuks = sum(r["stuks"] for r in rijen)
+        print(f"Af te boeken verkopen : {len(rijen)} regels = {stuks} stuks "
+              f"over {len(per_item)} kaarten")
         if not rijen:
             print("Niets te doen.")
 
