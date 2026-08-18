@@ -172,14 +172,14 @@ dubbele invoer staat er nog en is gemarkeerd. Backups vóór elke stap in `data/
 
 | | |
 |---|---|
-| `items` | **763**, 1410 stuks na afboeken (1620 in v7) |
-| voorraadwaarde (CM) | **€111.266,65** |
-| verkoopwaarde (comp) | €123.179,65 |
+| `items` | **763**, 1407 stuks na afboeken (1620 in v7) |
+| voorraadwaarde (CM) | **€111.238,65** |
+| verkoopwaarde (comp) | €123.139,65 |
 | items zonder enige prijs | 64 |
 | uitverkocht / **negatief** | 88 / **0** |
 | `transactions` | 362 totaal; event 3 = **232** regels, 116 op 15-08 en 116 op 16-08 |
-| gekoppeld | 212 van 362 |
-| afgeboekt | **202 regels = 210 stuks over 116 kaarten** |
+| gekoppeld | 214 van 362 |
+| afgeboekt | **204 regels = 213 stuks over 118 kaarten** |
 | netto omzet event 3 | verkoop **€12.524,08** (204 regels) · inkoop €2.240,00 (3 regels) |
 
 De omzet is een eigenschap van `transactions` en verandert dus niet mee met een
@@ -188,9 +188,28 @@ verandert is een nieuwe dubbelmarkering: de €12.529,08 werd €12.524,08 toen 
 #307 als dubbele tik werd gemarkeerd.
 
 **Database en v7 sluiten rij voor rij aan.** Gecontroleerd over alle 763 rijen:
-`items.aantal` = v7-aantal − afgeboekte stuks, met **0 afwijkingen** (1620 − 210 = 1410).
+`items.aantal` = v7-aantal − afgeboekte stuks, met **0 afwijkingen** (1620 − 213 = 1407).
 Die reconciliatie is de beste eindcontrole na een ronde — hij vangt zowel een
 mislukte koppeling als een dubbele afboeking.
+
+### Omzet zonder voorraadmutatie — 16 regels, bewust
+
+Niet elke verkoop hoort een kaart uit de voorraad te halen. Deze 16 regels tellen
+**wel** mee in de omzet en dragen daarom geen `is_dubbel`, maar er hangt bewust geen
+afboeking aan. Ze staan als referentie in `data/nog_te_koppelen.csv` — dat is geen
+actielijst meer.
+
+- `opschoon_notitie = 'inkoop al in v7 verwerkt'` — **3 inkopen, €2.240** (Pikachu
+  Nagaba, Pikachu SVP 027, de Prismatic masterset van €2.100). Die voorraad is met de
+  hand in v7 gezet; nog eens optellen zou dubbel zijn.
+- `opschoon_notitie = 'niet gekoppeld - product niet als los item in v7'` — **13
+  verkopen, €897**. Steeds hetzelfde patroon: er is een losse eenheid verkocht uit iets
+  dat in v7 als grootverpakking staat (3× Pitch Black Pokémon Center à €125 terwijl v7
+  alleen de *case* kent — die houden we; Mega Evolution Tin €20 tegen een *display* van
+  €220), of het product staat er helemaal niet in (Shiny Treasures, Gem pack vol 4,
+  Destined Rivals bundle, Politoed, Fuecoco, Charmleon promo). Wil je die voorraad wél
+  kloppend hebben, dan is de route een nieuwe regel in v7 — niet een koppeling in de
+  database.
 
 ### Duplicaten opgeruimd in v7 (18-08)
 
@@ -261,10 +280,11 @@ staan. Bij Moltres speelt dit niet: daar verschillen de namen ("… Articuno" te
 
 ### Nog open na de opschoning
 
-- `data/nog_te_koppelen.csv` — 18 regels (€937 verkoop + €2.240 inkoop) die niet
-  eenduidig te koppelen waren. Ze tellen mee in de omzet; alleen de voorraadafboeking
-  ontbreekt. Onder andere de 3 inkopen (waaronder de stapel van €2.100), 3× Pitch Black
-  Pokémon Center, de twee Charmleon-promo's à €1,00 en "Gem pack vol 4".
+De beursadministratie zelf is **af**: elke transactie is beoordeeld, er staat niets meer
+negatief, en database en v7 sluiten rij voor rij aan. Wat er nog ligt is losser werk:
+
+- **Producten die als losse eenheid in v7 moeten** als je die 13 verkopen (€897) alsnog
+  van de voorraad wilt halen — zie de sectie hierboven.
 - `data/twijfel_opschoning.csv` — de resterende vragen uit de eerste ronde.
 - Sessie B: `match_voorstellen.voorgesteld_item_id` staat nog los.
 
