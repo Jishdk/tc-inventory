@@ -94,6 +94,61 @@ zoeken → tikken → VASTLEGGEN. Daar staat een test op (`kern_snel`).
   flag `vrij ingevoerd`). Zonder item_id is die code het enige haakje om de regel later
   alsnog te koppelen.
 
+### Snelknoppen voor hardlopers
+
+Van sommige producten liggen er tientallen (283 sleeved boosters, 52 prismatic);
+daarvoor is zoeken de omweg. Boven de zoekbalk staat een rij tikknoppen die het
+product in één tik in het mandje zet.
+
+- De lijst staat als `SNELKNOPPEN` bovenin `beurs_app.py`: een korte naam voor op de
+  knop en een zoekterm om het échte item mee op te zoeken, met dezelfde zoekfunctie
+  als de zoekbalk. De prijs komt dus live uit de inventaris en veroudert niet.
+- **Precies één treffer, of de knop verschijnt niet.** Een verkeerd product in het
+  mandje is erger dan een knop die er niet is. Wat er afviel staat in een grijze regel
+  eronder, zodat een verouderde lijst opvalt in plaats van stil te verdwijnen.
+- Stand nu: vijf van de zes resolven tegen v7 (Prismatic €15, Sleeved €14, Tins €85 =
+  Cosmic Eclipse, Mega Dream €95, Black Bolt €120). **Twilight Masquerade booster staat
+  niet in v7** en valt weg. Black Bolt staat op 0 voorraad: de knop werkt, het mandje
+  waarschuwt.
+- Drie per rij — Streamlit's kolommen wrappen niet, en op 390 px is dat de breedte
+  waarop naam en prijs leesbaar blijven.
+
+### Prijs, onderhandelen en herhalen
+
+- **Prijs auto-vullen**: elke kaart komt binnen met zijn werkprijs (comp, anders cm).
+  Geldt voor het zoekresultaat, de snelknoppen en de "nog een"-knop; vrij ingevoerd
+  kent geen prijs en begint op nul.
+- **Presetrij** onder het mandje: `comp` / `−10%` / `handmatig`. Eén rij voor het hele
+  mandje in plaats van een rij per kaart — dat scheelt precies het verschil tussen
+  VASTLEGGEN boven of onder de vouw. Afgerond op hele euro's, half naar boven: op een
+  beursvloer reken je met briefjes en munten. Een preset moet naast het mandje-record
+  óók de widget-state bijwerken, anders wint de oude waarde van het veld.
+- **`onderhandeld`** (kolom uit 007) wordt **afgeleid**: aan zodra een bedrag van de
+  comp-prijs afwijkt. Dat is exact te bepalen uit wat er op het scherm staat, en een
+  vlag die je moet onthouden aan te zetten wordt vergeten. De knop ernaast overruled,
+  voor een prijs die toevallig op comp uitkomt maar wel bevochten is. Bij een trade is
+  er geen prijs per kaart, dus geen presets en geen vlag.
+- **"↻ Nog een"** na het vastleggen zet dezelfde kaart terug tegen de prijs die je
+  zojuist rekende (niet de comp — die afgedongen prijs is de gangbare geworden), aantal
+  weer op 1. Alleen zolang het mandje leeg is, niet na een undo, en niet na een trade.
+  Een herhaling via deze knop **slaat de dubbel-check over**: die is er voor een dubbele
+  tik, hier vraagt iemand er juist expliciet om. Vijf pakjes zou anders vier keer "ja,
+  toch vastleggen" kosten.
+
+### Boven de vouw op 390×844 (gemeten, 19-08-2026)
+
+| | VASTLEGGEN eindigt op |
+|---|---|
+| leeg mandje | 475 px |
+| 1 kaart + presetrij | **571 px** |
+| 2 kaarten | 777 px |
+| 3 kaarten | 878 px — scrollt |
+| 4 kaarten | 979 px — scrollt |
+
+De kernflow past ruim. Vanaf drie kaarten moet je scrollen en dat is onvermijdelijk:
+een mandjeregel is 87 px. Verder comprimeren betekent tap-targets verkleinen, en dat is
+op een beursvloer de verkeerde ruil.
+
 ### Trades
 
 - Het mandje bevat de kaarten die **wij** weggeven; die krijgen `bedrag = 0`, wél
