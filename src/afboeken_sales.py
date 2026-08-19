@@ -25,6 +25,15 @@ Wat het overslaat:
 - verkopen zonder `item_id`. Die zijn niet te raden — ze staan in
   `data/niet_gekoppelde_sales.csv` om met de hand te koppelen.
 
+Trades tellen mee voor de voorraad, maar alleen die uit de beurs-app — te herkennen
+aan hun `group_id`. Bij zo'n trade staat per uitgaande kaart een eigen regel met
+item_id en stuks (bedrag EUR 0; het geld zit in de losse cash-regel van dezelfde
+groep, en die heeft geen item_id en valt hier dus vanzelf buiten). Die kaarten zijn
+de deur uit en horen van de voorraad af.
+
+Oudere trades uit de WhatsApp-import blijven buiten schot: die hebben geen group_id
+en er staat niet vast welke kaart precies is weggegeven, dus daar zou afboeken raden zijn.
+
 Inkopen blijven buiten schot: die verhogen de voorraad, maar dat is al verwerkt in
 het Excel-bestand (v7 bevat de nieuwe inkoop). Ze hier nog eens optellen zou dubbel zijn.
 """
@@ -46,11 +55,12 @@ from db import get_engine, INVENTORY  # noqa: E402
 NIET_GEKOPPELD = INVENTORY.parent / "data" / "niet_gekoppelde_sales.csv"
 
 TE_BOEKEN = text("""
-    SELECT t.id, t.bedrag, t.item_id, COALESCE(t.stuks, 1) AS stuks,
+    SELECT t.id, t.bedrag, t.item_id, t.type, COALESCE(t.stuks, 1) AS stuks,
            i.onze_naam, i.code, i.aantal, i.verkocht, i.status
     FROM transactions t
     JOIN items i ON i.id = t.item_id
-    WHERE t.type = 'verkoop'
+    WHERE (t.type = 'verkoop'
+           OR (t.type = 'trade' AND t.group_id IS NOT NULL))
       AND t.afgeboekt_op IS NULL
       AND NOT t.is_dubbel
       AND (:event IS NULL OR t.event_id = :event)
@@ -63,6 +73,7 @@ LOSSE = text("""
     FROM transactions t
     JOIN events e ON e.id = t.event_id
     WHERE t.item_id IS NULL
+      AND COALESCE(t.flag, '') <> 'trade_cash'
       AND NOT t.is_dubbel
       AND (:event IS NULL OR t.event_id = :event)
     ORDER BY t.type, t.datum, t.tijd
@@ -114,8 +125,14 @@ def main():
             it["n"] += r["stuks"]
 
         stuks = sum(r["stuks"] for r in rijen)
+        uit_trades = [r for r in rijen if r["type"] == "trade"]
         print(f"Af te boeken verkopen : {len(rijen)} regels = {stuks} stuks "
               f"over {len(per_item)} kaarten")
+        if uit_trades:
+            # Apart genoemd: dit zijn geen verkopen en ze staan dus ook niet in de
+            # omzet, terwijl ze wél voorraad kosten.
+            print(f"   waarvan uit trades : {len(uit_trades)} regels = "
+                  f"{sum(r['stuks'] for r in uit_trades)} stuks (bedrag EUR 0)")
         if not rijen:
             print("Niets te doen.")
 
@@ -153,7 +170,8 @@ def main():
             {"ids": [r["id"] for r in rijen]})
         los = schrijf_losse(conn, event)
 
-    print(f"\nAfgeboekt: {len(rijen)} verkopen op {len(per_item)} kaarten.")
+    print(f"\nAfgeboekt: {len(rijen)} regels op {len(per_item)} kaarten "
+          f"({len([r for r in rijen if r['type'] == 'trade'])} daarvan uit trades).")
     print(f"Niet-gekoppelde regels genoteerd: {los} -> {NIET_GEKOPPELD}")
 
 

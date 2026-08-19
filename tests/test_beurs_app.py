@@ -103,7 +103,7 @@ def knoppen(at, prefix: str) -> list:
 
 def prijsvelden(at) -> list:
     """De prijs-invoervelden van het mandje, in de volgorde van het scherm."""
-    return [ni for ni in at.number_input if ni.key and ni.key.startswith("prijs_")]
+    return [ni for ni in at.number_input if ni.key and ni.key.startswith("regelprijs_")]
 
 
 def zet_prijs(at, index: int, waarde: float):
@@ -122,6 +122,40 @@ def kies(at, term: str, filter_op: str = ""):
 
 def mandje_namen(at) -> list:
     return [r["naam"] for r in at.session_state["mandje"]]
+
+
+def echt_gekozen(at, key: str) -> bool:
+    """Ziet de browser ook wat session_state beweert?
+
+    Bij een keuzebalk die pas later op het scherm verschijnt — `prijs_modus` bij
+    de tweede kaart, `cash_richting` in TRADE — komt een waarde die al in
+    session_state stond niet bij de frontend aan: het knoppenpaar staat dan leeg
+    terwijl `.value` netjes de juiste waarde teruggeeft. Alleen `proto.default`
+    verraadt het verschil, en dat is precies wat de browser meekrijgt."""
+    return bool(list(at.segmented_control(key=key).proto.default))
+
+
+def css_botsingen(at) -> set:
+    """Selectors die per ongeluk een ándere widget te pakken hebben.
+
+    Streamlit hangt aan elk element met een key de class `st-key-<key>`, en de
+    app selecteert daarop met `[class*="st-key-…"]`. Dat is een prefix-match: een
+    selector voor `pick_` hóórt `pick_3` te raken. Maar hij raakt net zo goed
+    `pick_modus`, en dat is dan een heel ander element met heel andere opmaak.
+    Dat is hier één keer misgegaan — `[class*="st-key-prijs_"] button
+    {display:none}` maakte de prijskeuze `prijs_modus` onzichtbaar — en het is
+    niet te zien in een headless test die geen CSS uitvoert. Vandaar deze check
+    op de selectors zelf.
+
+    Een rest die alleen uit cijfers bestaat is de bedoeling (`pick_` + `3`);
+    alles daarbuiten is een botsing."""
+    stijl = "\n".join(m.value for m in at.markdown if "<style>" in m.value)
+    selectors = set(re.findall(r'\[class\*="st-key-([^"]+)"\]', stijl))
+    elementen = (list(at.button) + list(at.number_input) + list(at.text_input)
+                 + list(at.segmented_control))
+    keys = {el.key for el in elementen if el.key}
+    return {(s, k) for s in selectors for k in keys
+            if k.startswith(s) and k != s and not k[len(s):].isdigit()}
 
 
 def maak_engine():
@@ -202,6 +236,9 @@ def mandje_tests(AppTest, db):
           f"({[p.value for p in prijsvelden(at)]})")
     check(any('class="tc-teller"' in m.value and ">2</b> kaarten" in m.value
               for m in at.markdown), "teller boven het mandje telt mee")
+    check(at.segmented_control(key="prijs_modus").value == "Per kaart"
+          and echt_gekozen(at, "prijs_modus"),
+          "de prijskeuze staat op 'Per kaart' — en dat is op het scherm ook te zien")
     check("2 KAARTEN" in at.button(key="vastleggen").label,
           f"knop noemt het aantal ({at.button(key='vastleggen').label})")
     check(any("totaal <b>€570</b>" in m.value for m in at.markdown),
@@ -212,6 +249,10 @@ def mandje_tests(AppTest, db):
     zet_prijs(at, 0, 400.0)
     check(any("totaal <b>€640</b>" in m.value for m in at.markdown),
           "400 + 2 × 120 = 640")
+
+    botsingen = css_botsingen(at)
+    check(not botsingen,
+          f"geen CSS-selector die stiekem een andere widget raakt ({botsingen})")
 
     at.button(key="vastleggen").click().run()
     r = rijen(engine)
@@ -456,6 +497,129 @@ def nieuwe_features(AppTest, db):
           "een mandje typ je niet per ongeluk twee keer — geen vraag")
 
 
+def trade_tests(AppTest, db):
+    """Trades: dezelfde mandje-flow voor de kaarten die eruit gaan, plus één
+    cash-regel met de richting erin. Draait op een eigen verse database."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("TRADES — kaarten eruit, cash en binnenkomst in één groep")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+    check(any(sc.key == "modus" for sc in at.segmented_control),
+          "de moduskeuze staat er weer zodra TRADE bestaat")
+
+    at.segmented_control(key="modus").set_value("TRADE").run()
+    check(at.session_state["modus"] == "TRADE", "TRADE is te kiezen")
+    check(bool(at.segmented_control(key="cash_richting")),
+          "de twee cash-richtingen staan er meteen")
+
+    # --- twee kaarten eruit, wij ontvangen cash ---------------------------
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    check(not prijsvelden(at),
+          "een geruilde kaart heeft geen prijsveld — het geld hangt aan de afspraak")
+    check(any("eruit" in m.value for m in at.markdown),
+          "de regels laten zien dat ze de deur uit gaan")
+    check(not any(sc.key == "prijs_modus" for sc in at.segmented_control),
+          "per kaart/totaalprijs hoort niet bij een trade")
+    check(at.segmented_control(key="cash_richting").value == "WIJ ONTVANGEN €"
+          and echt_gekozen(at, "cash_richting"),
+          "cash staat standaard op ontvangen — en die knop is ook echt aangezet")
+
+    at.number_input(key="cash_bedrag").set_value(75.0).run()
+    at.text_input(key="binnen_notitie").set_value("5 kaarten, zie WA-foto").run()
+    check(any("cash <b>+€75</b>" in m.value for m in at.markdown),
+          "de balk toont de richting van het geld")
+    check("TRADE" in at.button(key="vastleggen").label,
+          f"knop noemt de trade ({at.button(key='vastleggen').label})")
+    at.button(key="vastleggen").click().run()
+
+    r = rijen(engine)
+    check(len(r) == 3, f"twee kaarten + één cash-regel (kreeg {len(r)})")
+    check(all(x["type"] == "trade" for x in r), "alles staat als type 'trade'")
+    groepen = {x["group_id"] for x in r}
+    check(len(groepen) == 1 and None not in groepen,
+          f"kaarten én cash zitten in dezelfde groep ({groepen})")
+    kaarten, cash = r[:2], r[2]
+    check([float(x["bedrag"]) for x in kaarten] == [0.0, 0.0],
+          f"de kaarten gaan op €0 de deur uit "
+          f"({[float(x['bedrag']) for x in kaarten]})")
+    check(all(x["item_id"] and x["stuks"] for x in kaarten),
+          "elke kaart houdt item_id + stuks, dus de voorraad boekt af")
+    check(float(cash["bedrag"]) == 75.0 and cash["flag"] == "trade_cash",
+          f"één cash-regel van €75 met flag 'trade_cash' ({toon(cash)})")
+    check(cash["item_id"] is None and cash["ruwe_tekst"] == "5 kaarten, zie WA-foto",
+          "de cash-regel draagt de omschrijving van wat er binnenkwam")
+    uitkomst(*[toon(x) for x in r])
+
+    # --- wij leggen bij: negatief bedrag ----------------------------------
+    kies(at, "umbreon v", "189")
+    at.segmented_control(key="cash_richting").set_value("WIJ LEGGEN BIJ €").run()
+    at.number_input(key="cash_bedrag").set_value(40.0).run()
+    check(any("cash <b>−€40</b>" in m.value for m in at.markdown),
+          "bijleggen leest als een min op het scherm")
+    at.button(key="vastleggen").click().run()
+    cash = rijen(engine)[-1]
+    check(float(cash["bedrag"]) == -40.0,
+          f"bijleggen staat negatief in de database ({float(cash['bedrag'])})")
+    uitkomst(toon(cash))
+
+    # --- gelijke ruil: €0 mag bij een trade -------------------------------
+    kies(at, "charizard")
+    at.number_input(key="cash_bedrag").set_value(0.0).run()
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    check(len(r) == 7, f"een gelijke ruil wordt gewoon vastgelegd (kreeg {len(r)})")
+    check(float(r[-1]["bedrag"]) == 0.0 and r[-1]["flag"] == "trade_cash",
+          "ook zonder cash is er een anker-regel voor de afspraak")
+    check("niet omschreven" in r[-1]["ruwe_tekst"],
+          f"zonder omschrijving staat er zichtbaar dat die ontbreekt "
+          f"({r[-1]['ruwe_tekst']!r})")
+
+    # --- verkoop weigert €0 nog steeds ------------------------------------
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    kies(at, "bulbasaur")
+    at.button(key="vastleggen").click().run()
+    check(len(rijen(engine)) == 7, "een verkoop van €0 blijft geweigerd")
+    check(bool(at.error), "met een foutmelding erbij")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+
+    # --- dagtotaal: trades tellen als afspraken, niet als euro's ----------
+    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 3 (cash +€35)",
+          f"drie trades, netto €75 − €40 + €0 = €35 ({dagtotaal(at)!r})")
+    uitkomst(f"dagtotaal: {dagtotaal(at)}")
+
+    # --- undo haalt de hele trade weg, cash-regel incluis -----------------
+    at.segmented_control(key="modus").set_value("TRADE").run()
+    check("2 regels" in at.button(key="undo").label,
+          f"undo kondigt kaart + cash aan ({at.button(key='undo').label})")
+    at.button(key="undo").click().run()
+    at.button(key="undo_ja").click().run()
+    r = rijen(engine)
+    check(len(r) == 5, f"de laatste trade is in zijn geheel weg (kreeg {len(r)})")
+    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 2 (cash +€35)",
+          f"dagtotaal telt nog twee trades ({dagtotaal(at)!r})")
+    uitkomst(f"rijen na undo: {[(x['type'], float(x['bedrag'])) for x in r]}")
+
+    # --- trades tellen niet mee als verkoopomzet --------------------------
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    kies(at, "umbreon vmax")
+    zet_prijs(at, 0, 100.0)
+    at.button(key="vastleggen").click().run()
+    check(dagtotaal(at) == "Vandaag: verkoop €100 · trades: 2 (cash +€35)",
+          f"de verkoop staat los van de trades ({dagtotaal(at)!r})")
+    uitkomst(f"dagtotaal: {dagtotaal(at)}")
+    print()
+
+
 def scenarios(AppTest, db):
     """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
     'verwacht → resultaat' per stap."""
@@ -477,11 +641,13 @@ def scenarios(AppTest, db):
     kop("1.", "Kan er nog inkoop geboekt worden?",
         "geen INKOOP-modus, geen soort-keuze bij vrij invoeren, geen rekenhulp")
     modi = [sc.key for sc in at.segmented_control]
-    check("modus" not in modi and "inkoop_modus" not in modi,
-          f"scenario 1: geen modus-/inkoopkeuze meer ({modi})")
+    keuzes = at.segmented_control(key="modus").options
+    check("INKOOP" not in keuzes, f"scenario 1: INKOOP is geen modus meer ({keuzes})")
+    check("inkoop_modus" not in modi,
+          f"scenario 1: geen per-kaart/totaal-keuze voor inkoop meer ({modi})")
     check("vrij_modus" not in modi, "scenario 1: vrij invoeren kent geen soort meer")
     check(not knoppen(at, "pct_"), "scenario 1: de inkoop-rekenhulp is weg")
-    uitkomst(f"segmented controls op het scherm: {modi or '(geen)'}",
+    uitkomst(f"modi op het scherm: {keuzes}",
              f"dagtotaal: {dagtotaal(at)}")
 
     # --- 2. drie kaarten aan één klant ------------------------------------
@@ -586,8 +752,9 @@ def main():
     # --- dagtotaal: leeg bij de start -------------------------------------
     check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 0",
           f"dagtotaal begint op nul ({dagtotaal(at)!r})")
-    check(not any(sc.key == "modus" for sc in at.segmented_control),
-          "met alleen VERKOOP is er geen moduskeuze te maken — balk blijft weg")
+    check(at.segmented_control(key="modus").options == ["VERKOOP", "TRADE"],
+          f"twee modi: verkoop en trade "
+          f"({at.segmented_control(key='modus').options})")
 
     # --- zoeken -----------------------------------------------------------
     at.text_input(key="zoekterm").set_value("umbreon").run()
@@ -776,6 +943,7 @@ def main():
           f"({[float(x['bedrag']) for x in r]})")
 
     mandje_tests(AppTest, db)
+    trade_tests(AppTest, db)
     nieuwe_features(AppTest, db)
     kern_snel(AppTest, db)
     scenarios(AppTest, db)
