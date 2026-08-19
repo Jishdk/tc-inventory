@@ -101,6 +101,29 @@ def knoppen(at, prefix: str) -> list:
     return [b for b in at.button if b.key and b.key.startswith(prefix)]
 
 
+def prijsvelden(at) -> list:
+    """De prijs-invoervelden van het mandje, in de volgorde van het scherm."""
+    return [ni for ni in at.number_input if ni.key and ni.key.startswith("prijs_")]
+
+
+def zet_prijs(at, index: int, waarde: float):
+    at.number_input(key=prijsvelden(at)[index].key).set_value(waarde).run()
+
+
+def kies(at, term: str, filter_op: str = ""):
+    """Zoek een kaart en tik het (eerste passende) resultaat aan — daarmee staat
+    hij in het mandje."""
+    at.text_input(key="zoekterm").set_value(term).run()
+    treffers = knoppen(at, "pick_")
+    if filter_op:
+        treffers = [b for b in treffers if filter_op in b.label]
+    at.button(key=treffers[0].key).click().run()
+
+
+def mandje_namen(at) -> list:
+    return [r["naam"] for r in at.session_state["mandje"]]
+
+
 def maak_engine():
     # Bestand, geen :memory: — Streamlit draait het script in een eigen thread.
     pad = Path(tempfile.mkdtemp(prefix="tc_beurs_test_")) / "test.db"
@@ -151,11 +174,173 @@ def uitkomst(*regels):
         print(("   resultaat: " if i == 0 else "              ") + regel)
 
 
-def nieuwe_features(AppTest, db):
-    """Aantallen, voorraad-indicator en dubbel-check (features 1-3).
+def mandje_tests(AppTest, db):
+    """Het mandje: meerdere kaarten in één transactie, per kaart of op één
+    afgesproken totaalbedrag. Draait op een eigen verse database."""
+    import streamlit as st
 
-    Draait op een eigen verse database: deze tests schrijven rijen weg, en de
-    rookproef hierboven rekent met vaste rijnummers."""
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("MANDJE — meerdere kaarten in één transactie")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    # --- twee kaarten, elk zijn eigen prijs -------------------------------
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    check(mandje_namen(at) == ["Umbreon VMAX (Alternate Art)",
+                               "Charizard ex (Special Illustration)"],
+          f"twee kaarten in het mandje ({mandje_namen(at)})")
+    check([p.value for p in prijsvelden(at)] == [450.0, 120.0],
+          f"elke regel begint op zijn eigen comp-prijs "
+          f"({[p.value for p in prijsvelden(at)]})")
+    check(any('class="tc-teller"' in m.value and ">2</b> kaarten" in m.value
+              for m in at.markdown), "teller boven het mandje telt mee")
+    check("2 KAARTEN" in at.button(key="vastleggen").label,
+          f"knop noemt het aantal ({at.button(key='vastleggen').label})")
+    check(any("totaal <b>€570</b>" in m.value for m in at.markdown),
+          "lopend totaal onderaan: 450 + 120 = 570")
+
+    # aantal op de tweede regel omhoog, prijs van de eerste omlaag
+    at.button(key=knoppen(at, "plus_")[1].key).click().run()
+    zet_prijs(at, 0, 400.0)
+    check(any("totaal <b>€640</b>" in m.value for m in at.markdown),
+          "400 + 2 × 120 = 640")
+
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    check(len(r) == 2, f"twee kaarten = twee regels (kreeg {len(r)})")
+    check(r[0]["group_id"] and r[0]["group_id"] == r[1]["group_id"],
+          "beide regels delen één group_id")
+    check([float(x["bedrag"]) for x in r] == [400.0, 240.0],
+          f"elke regel draagt zijn eigen bedrag ({[float(x['bedrag']) for x in r]})")
+    check([x["stuks"] for x in r] == [1, 2], f"stuks per regel ({[x['stuks'] for x in r]})")
+    check(all(x["item_id"] is not None for x in r),
+          "beide regels blijven aan hun item gekoppeld — dus afboekbaar")
+    check([x["flag"] for x in r] == ["mandje", "mandje"], "flag 'mandje'")
+    uitkomst(*[toon(x) for x in r])
+    check(at.session_state["mandje"] == [], "mandje is leeg na vastleggen")
+
+    # --- één afgesproken totaalbedrag -------------------------------------
+    kies(at, "umbreon vmax")        # comp 450
+    kies(at, "umbreon v")           # comp 45
+    at.segmented_control(key="prijs_modus").set_value("Totaalprijs").run()
+    check(not prijsvelden(at), "bij een totaalprijs verdwijnen de losse prijzen")
+    check(any("in totaal" in m.value for m in at.markdown),
+          "de regels tonen dat ze in het totaal zitten")
+    at.number_input(key="mandje_totaal").set_value(450.0).run()
+    at.button(key="vastleggen").click().run()
+
+    r = rijen(engine)[2:]
+    bedragen = [float(x["bedrag"]) for x in r]
+    check(sum(bedragen) == 450.0,
+          f"de som is precies het afgesproken bedrag ({sum(bedragen)})")
+    check(bedragen == [409.09, 40.91],
+          f"naar rato van de comp-prijs verdeeld ({bedragen})")
+    check(r[0]["group_id"] == r[1]["group_id"] and r[0]["flag"] == "mandje-totaal",
+          "één groep, flag 'mandje-totaal'")
+    uitkomst(f"afgesproken €450 over comp €450 + €45 → {bedragen}", *[toon(x) for x in r])
+
+    # --- regel eruit halen -------------------------------------------------
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    kies(at, "bulbasaur")
+    check(len(at.session_state["mandje"]) == 3, "drie kaarten in het mandje")
+    at.button(key=knoppen(at, "weg_")[1].key).click().run()
+    check(mandje_namen(at) == ["Umbreon VMAX (Alternate Art)", "Bulbasaur"],
+          f"de middelste regel is eruit ({mandje_namen(at)})")
+    check([p.value for p in prijsvelden(at)] == [450.0, 0.0],
+          f"de prijzen schuiven mee met hun eigen regel "
+          f"({[p.value for p in prijsvelden(at)]})")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    check(at.session_state["mandje"] == [], "mandje helemaal leeg te maken")
+    check(at.button(key="vastleggen").disabled,
+          "VASTLEGGEN staat uit bij een leeg mandje")
+    check(len(rijen(engine)) == 4, "weggooien schrijft niets weg")
+
+    # --- vrij invoeren komt óók in het mandje ------------------------------
+    kies(at, "charizard")
+    at.text_input(key="vrij_naam").set_value("Japanse Eevee Heroes booster box").run()
+    at.text_input(key="vrij_code").set_value("s6a").run()
+    at.button(key="vrij_knop").click().run()
+    check(mandje_namen(at) == ["Charizard ex (Special Illustration)",
+                               "Japanse Eevee Heroes booster box"],
+          f"vrije invoer schuift aan in hetzelfde mandje ({mandje_namen(at)})")
+    zet_prijs(at, 1, 275.0)
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)[4:]
+    check(len(r) == 2, "één klant, twee regels")
+    check(r[1]["item_id"] is None and r[1]["flag"] == "vrij ingevoerd",
+          "de vrije regel houdt zijn eigen flag, ook in een mandje")
+    check(r[1]["code"] == "s6a", f"losse code bewaard ({r[1]['code']!r})")
+    check(r[0]["group_id"] == r[1]["group_id"],
+          "gekoppelde en vrije regel zitten in dezelfde groep")
+    uitkomst(*[toon(x) for x in r])
+
+    # --- undo draait de hele groep terug -----------------------------------
+    check(len(rijen(engine)) == 6, "zes regels vóór de undo")
+    check("2 regels" in at.button(key="undo").label,
+          f"undo-knop kondigt aan dat het er twee zijn "
+          f"({at.button(key='undo').label})")
+    at.button(key="undo").click().run()
+    at.button(key="undo_ja").click().run()
+    r = rijen(engine)
+    check(len(r) == 4, f"undo haalt beide regels van de afspraak weg (kreeg {len(r)})")
+    check(all(x["group_id"] != "" for x in r), "de eerdere groepen blijven staan")
+    uitkomst(f"rijen na undo: {[float(x['bedrag']) for x in r]}")
+
+
+def kern_snel(AppTest, db):
+    """De losse verkoop mag door het mandje niet langer worden: zoeken, tikken,
+    vastleggen — en de prijs staat al goed."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("KERNFLOW — losse verkoop in drie handelingen")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    kop("A.", "Hoeveel handelingen kost één losse verkoop?",
+        "3: zoekterm intikken, resultaat aantikken, VASTLEGGEN")
+    at.text_input(key="zoekterm").set_value("umbreon vmax").run()          # 1
+    at.button(key=knoppen(at, "pick_")[0].key).click().run()               # 2
+    check(len(at.session_state["mandje"]) == 1,
+          "één tik op het zoekresultaat zet de kaart in het mandje")
+    check(prijsvelden(at)[0].value == 450.0,
+          f"de prijs staat al goed ({prijsvelden(at)[0].value})")
+    check(at.text_input(key="zoekterm").value == "",
+          "zoekveld is leeg — meteen door naar de volgende kaart")
+    check("2 KAARTEN" not in at.button(key="vastleggen").label,
+          "bij één kaart blijft de knop de gewone VASTLEGGEN")
+    check(not any(sc.key == "prijs_modus" for sc in at.segmented_control),
+          "per kaart/totaalprijs blijft weg zolang het er één is")
+    at.button(key="vastleggen").click().run()                              # 3
+    r = rijen(engine)
+    check(len(r) == 1 and float(r[0]["bedrag"]) == 450.0,
+          f"drie handelingen, één verkoop van €450 ({[float(x['bedrag']) for x in r]})")
+    check(r[0]["group_id"] is None,
+          "een losse verkoop krijgt geen group_id — niets veranderd aan de data")
+    uitkomst("zoekterm → resultaat aantikken → VASTLEGGEN", toon(r[0]))
+    print()
+
+
+def nieuwe_features(AppTest, db):
+    """Aantallen, voorraad-indicator en dubbel-check (features 1-3), nu binnen
+    het mandje. Draait op een eigen verse database."""
     import streamlit as st
 
     engine = maak_engine()
@@ -170,108 +355,110 @@ def nieuwe_features(AppTest, db):
     at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
     at.run()
 
-    # --- aantallen: +/- , per stuk en totaal (feature 1) -------------------
-    at.text_input(key="zoekterm").set_value("charizard").run()
-    at.button(key=knoppen(at, "pick_")[0].key).click().run()
-    check(at.session_state["stuks"] == 1, "aantal begint op 1")
-    check(at.button(key="stuks_min").disabled,
+    # --- aantallen (feature 1) --------------------------------------------
+    kies(at, "charizard")
+    rid = at.session_state["mandje"][0]["rid"]
+    check(at.session_state[f"stuks_{rid}"] == 1, "aantal begint op 1")
+    check(at.button(key=f"min_{rid}").disabled,
           "de min-knop staat uit op 1 — minder dan één verkoop bestaat niet")
-    check(not any(sc.key == "prijs_modus" for sc in at.segmented_control),
-          "per stuk/totaal blijft verborgen zolang het er één is")
+    at.button(key=f"plus_{rid}").click().run()
+    at.button(key=f"plus_{rid}").click().run()
+    check(at.session_state[f"stuks_{rid}"] == 3,
+          f"twee keer plus geeft 3 ({at.session_state[f'stuks_{rid}']})")
+    at.button(key=f"min_{rid}").click().run()
+    check(at.session_state[f"stuks_{rid}"] == 2, "min haalt er weer een af")
+    at.button(key=f"plus_{rid}").click().run()
 
-    at.button(key="stuks_plus").click().run()
-    at.button(key="stuks_plus").click().run()
-    check(at.session_state["stuks"] == 3, f"drie keer plus geeft 3 "
-                                          f"({at.session_state['stuks']})")
-    check(any(sc.key == "prijs_modus" for sc in at.segmented_control),
-          "vanaf 2 stuks verschijnt de keuze per stuk/totaal")
-    at.button(key="stuks_min").click().run()
-    check(at.session_state["stuks"] == 2, "min haalt er weer een af")
-    at.button(key="stuks_plus").click().run()
-
-    # per stuk: 3 × 15 = 45 het totaal in
-    at.number_input(key="bedrag").set_value(15.0).run()
-    tekst = " ".join(m.value for m in at.markdown)
-    check("3 × €15 = <b>€45</b>" in tekst or "3 × €15 = €45" in tekst.replace("<b>","").replace("</b>",""),
-          "rekenregel toont stuksprijs × aantal = totaal")
+    zet_prijs(at, 0, 15.0)
     at.button(key="vastleggen").click().run()
-    r = rijen(engine)
-    laatste = r[-1]
+    laatste = rijen(engine)[-1]
     check(float(laatste["bedrag"]) == 45.0,
-          f"bedrag is het totaal, niet de stuksprijs ({float(laatste['bedrag'])})")
+          f"bedrag is het totaal (3 × €15), niet de stuksprijs "
+          f"({float(laatste['bedrag'])})")
     check(int(laatste["stuks"]) == 3, f"stuks = 3 in de database ({laatste['stuks']})")
+    check(laatste["group_id"] is None,
+          "drie stuks van één kaart is nog steeds één regel zonder groep")
     uitkomst(toon(laatste) + f"  stuks={laatste['stuks']}")
 
-    # totaal: 2 stuks voor samen 70, dus niet 140
-    at.text_input(key="zoekterm").set_value("umbreon vmax").run()
-    at.button(key=knoppen(at, "pick_")[0].key).click().run()
-    at.button(key="stuks_plus").click().run()
-    at.segmented_control(key="prijs_modus").set_value("Totaal").run()
-    at.number_input(key="bedrag").set_value(700.0).run()
-    at.button(key="vastleggen").click().run()
-    r = rijen(engine)
-    laatste = r[-1]
-    check(float(laatste["bedrag"]) == 700.0,
-          f"in totaal-modus gaat het bedrag ongedeeld de database in "
-          f"({float(laatste['bedrag'])})")
-    check(int(laatste["stuks"]) == 2, f"stuks = 2 ({laatste['stuks']})")
-    check(at.session_state["stuks"] == 1, "aantal valt terug op 1 na vastleggen")
-    check(at.session_state["prijs_modus"] == "Per stuk",
-          "per stuk/totaal valt terug op 'Per stuk'")
+    # --- voorraad-indicator (feature 2) ------------------------------------
+    at.text_input(key="zoekterm").set_value("umbreon").run()
+    labels = [b.label for b in knoppen(at, "pick_")]
+    check(any("3 op voorraad" in lb for lb in labels),
+          f"voorraad staat bij het zoekresultaat ({labels})")
+    check(any("1 op voorraad" in lb for lb in labels),
+          f"laatste exemplaar toont '1 op voorraad' ({labels})")
+
+    kies(at, "pikachu promo")
+    tekst = " ".join(m.value for m in at.markdown)
+    check("UITVERKOCHT" in tekst, "uitverkochte kaart waarschuwt in het mandje")
+    check("klopt dan alleen niet" in tekst, "waarschuwen, niet blokkeren")
+    check(not at.button(key="vastleggen").disabled,
+          "VASTLEGGEN blijft bruikbaar bij voorraad 0")
+
+    # meer dan er ligt: ook een melding, ook geen blokkade
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    kies(at, "umbreon v", "189")            # voorraad 1
+    rid = at.session_state["mandje"][0]["rid"]
+    at.button(key=f"plus_{rid}").click().run()
+    check(any("Meer dan de 1 op voorraad" in m.value for m in at.markdown),
+          "2 stuks van een kaart waarvan er 1 ligt geeft een melding")
+    at.button(key=f"min_{rid}").click().run()
 
     # --- dubbel-waarschuwing (feature 3) -----------------------------------
-    at.text_input(key="zoekterm").set_value("umbreon v").run()
-    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
-    at.button(key=keuze[0].key).click().run()
-    at.number_input(key="bedrag").set_value(45.0).run()
+    zet_prijs(at, 0, 45.0)
     at.button(key="vastleggen").click().run()
     voor = len(rijen(engine))
 
-    # exact dezelfde kaart voor exact hetzelfde bedrag, direct erna
-    at.text_input(key="zoekterm").set_value("umbreon v").run()
-    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
-    at.button(key=keuze[0].key).click().run()
-    at.number_input(key="bedrag").set_value(45.0).run()
+    kies(at, "umbreon v", "189")
+    zet_prijs(at, 0, 45.0)
     at.button(key="vastleggen").click().run()
     check(len(rijen(engine)) == voor,
           "tweede identieke invoer wordt nog NIET weggeschreven")
     check(at.session_state["dubbel_vraag"] is not None, "de dubbel-vraag staat aan")
-    tekst = " ".join(m.value for m in at.markdown)
-    check("Net al ingevoerd" in tekst, f"inline waarschuwing zichtbaar")
+    check("Net al ingevoerd" in " ".join(m.value for m in at.markdown),
+          "inline waarschuwing zichtbaar")
     check(at.button(key="vastleggen").disabled,
           "VASTLEGGEN staat uit zolang de vraag openstaat")
-    # let op: 'tc-dubbel' staat óók in het <style>-blok, dus filteren op de
-    # gerenderde div en niet op de klassenaam alleen
     banner = [m.value for m in at.markdown if 'class="tc-dubbel"' in m.value]
     uitkomst(re.sub(r"<[^>]+>", "", banner[0]).strip() if banner else "(geen banner)")
 
-    # doorgaan mag: twee losse pakjes van hetzelfde soort is legitiem
     at.button(key="dubbel_ja").click().run()
-    check(len(rijen(engine)) == voor + 1,
-          "na bevestigen wordt hij alsnog vastgelegd")
+    check(len(rijen(engine)) == voor + 1, "na bevestigen wordt hij alsnog vastgelegd")
     check(at.session_state["dubbel_vraag"] is None, "de vraag is opgeruimd")
 
-    # en afzien kan ook
-    at.text_input(key="zoekterm").set_value("umbreon v").run()
-    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
-    at.button(key=keuze[0].key).click().run()
-    at.number_input(key="bedrag").set_value(45.0).run()
+    kies(at, "umbreon v", "189")
+    zet_prijs(at, 0, 45.0)
     at.button(key="vastleggen").click().run()
     at.button(key="dubbel_nee").click().run()
     check(len(rijen(engine)) == voor + 1, "na 'nee' komt er niets bij")
     check(at.session_state["dubbel_vraag"] is None, "de vraag is weg na 'nee'")
+    check(len(at.session_state["mandje"]) == 1,
+          "de kaart blijft in het mandje staan na 'nee'")
 
-    # een ander bedrag is geen dubbeling
-    at.number_input(key="bedrag").set_value(40.0).run()
+    zet_prijs(at, 0, 40.0)
     at.button(key="vastleggen").click().run()
-    check(len(rijen(engine)) == voor + 2,
-          "ander bedrag gaat er zonder vraag doorheen")
+    check(len(rijen(engine)) == voor + 2, "ander bedrag gaat er zonder vraag doorheen")
+
+    # een mandje van meerdere kaarten wordt niet als dubbeling gezien
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    zet_prijs(at, 0, 20.0)
+    zet_prijs(at, 1, 20.0)
+    at.button(key="vastleggen").click().run()
+    at.button(key="undo").click().run()
+    at.button(key="undo_ja").click().run()
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    zet_prijs(at, 0, 20.0)
+    zet_prijs(at, 1, 20.0)
+    at.button(key="vastleggen").click().run()
+    check(at.session_state["dubbel_vraag"] is None,
+          "een mandje typ je niet per ongeluk twee keer — geen vraag")
 
 
 def scenarios(AppTest, db):
     """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
-    'verwacht → resultaat' per stap. Draait op een eigen verse database, zodat de
-    bedragen in het verslag niet door de rookproef lopen."""
+    'verwacht → resultaat' per stap."""
     import streamlit as st
 
     engine = maak_engine()
@@ -293,66 +480,80 @@ def scenarios(AppTest, db):
     check("modus" not in modi and "inkoop_modus" not in modi,
           f"scenario 1: geen modus-/inkoopkeuze meer ({modi})")
     check("vrij_modus" not in modi, "scenario 1: vrij invoeren kent geen soort meer")
-    check(not knoppen(at, "pct_") and not knoppen(at, "add_"),
-          "scenario 1: rekenhulp en stapel zijn weg")
+    check(not knoppen(at, "pct_"), "scenario 1: de inkoop-rekenhulp is weg")
     uitkomst(f"segmented controls op het scherm: {modi or '(geen)'}",
              f"dagtotaal: {dagtotaal(at)}")
 
-    # --- 2. vrije invoer met code -----------------------------------------
-    kop("2.", "Belandt de code van een vrij ingevoerde kaart in de code-kolom?",
-        "naam 'Mew ex promo' + code '151/165' → code-kolom gevuld, item_id NULL")
-    at.text_input(key="vrij_naam").set_value("Mew ex promo").run()
-    at.text_input(key="vrij_code").set_value("151/165").run()
-    at.number_input(key="vrij_bedrag").set_value(275.0).run()
-    at.button(key="vrij_knop").click().run()
-
+    # --- 2. drie kaarten aan één klant ------------------------------------
+    kop("2.", "Kan ik drie kaarten aan één klant in één keer vastleggen?",
+        "3 regels met dezelfde group_id, elk met item_id en stuks, samen €585")
+    kies(at, "umbreon vmax")        # 450
+    kies(at, "charizard")           # 120
+    kies(at, "umbreon v", "189")    # 45
+    check(len(at.session_state["mandje"]) == 3, "scenario 2: drie kaarten in het mandje")
+    at.button(key="vastleggen").click().run()
     r = rijen(engine)
-    vrij = r[-1]
-    check(vrij["code"] == "151/165", "scenario 2: code in de code-kolom")
-    check(vrij["ruwe_tekst"] == "Mew ex promo", "scenario 2: naam in ruwe_tekst")
-    check(vrij["item_id"] is None and vrij["flag"] == "vrij ingevoerd",
-          "scenario 2: item_id NULL, flag 'vrij ingevoerd'")
-    check(vrij["type"] == "verkoop", "scenario 2: staat als verkoop geboekt")
-    uitkomst(toon(vrij))
+    groepen = {x["group_id"] for x in r}
+    check(len(r) == 3 and len(groepen) == 1 and None not in groepen,
+          f"scenario 2: drie regels in één groep ({len(r)} regels, {groepen})")
+    check(sum(float(x["bedrag"]) for x in r) == 615.0,
+          f"scenario 2: samen €615 ({sum(float(x['bedrag']) for x in r)})")
+    check(all(x["item_id"] and x["stuks"] for x in r),
+          "scenario 2: elke regel houdt item_id + stuks, dus elk boekt af")
+    uitkomst(*[toon(x) for x in r])
 
-    # --- 3. dagtotaal + undo ----------------------------------------------
-    kop("3.", "Klopt het dagtotaal, en draait undo mijn eigen laatste invoer terug?",
-        "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn €275 "
-        "en laat hun €50 staan")
+    # --- 3. onderhandeld totaalbedrag -------------------------------------
+    kop("3.", "En als de klant afdingt tot één rond bedrag?",
+        "€600 voor comp €450 + €120 → naar rato verdeeld, som exact €600")
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    at.segmented_control(key="prijs_modus").set_value("Totaalprijs").run()
+    at.number_input(key="mandje_totaal").set_value(600.0).run()
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)[3:]
+    bedragen = [float(x["bedrag"]) for x in r]
+    check(sum(bedragen) == 600.0, f"scenario 3: som is exact €600 ({sum(bedragen)})")
+    check(r[0]["flag"] == "mandje-totaal", "scenario 3: als onderhandeld totaal gemarkeerd")
+    uitkomst(f"comp €450 + €120 = €570 → afgesproken €600 → {bedragen}",
+             *[toon(x) for x in r])
+
+    # --- 4. dagtotaal + undo ----------------------------------------------
+    kop("4.", "Klopt het dagtotaal, en draait undo mijn eigen laatste afspraak terug?",
+        "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn "
+        "hele mandje van €600 en laat hun €50 staan")
     voor_collega = dagtotaal(at)
-    check(voor_collega == "Vandaag: verkoop €275 · trades: 0",
-          f"scenario 3: eigen invoer telt direct mee ({voor_collega!r})")
+    check(voor_collega == "Vandaag: verkoop €1,215 · trades: 0",
+          f"scenario 4: eigen invoer telt direct mee ({voor_collega!r})")
 
     at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
     at2.run()
-    at2.text_input(key="zoekterm").set_value("umbreon v").run()
-    at2.button(key=knoppen(at2, "pick_")[0].key).click().run()
-    at2.number_input(key="bedrag").set_value(50.0).run()
+    kies(at2, "umbreon v", "189")
+    zet_prijs(at2, 0, 50.0)
     at2.button(key="vastleggen").click().run()
 
     # Bewust gedrag: de balk leest uit een cache van 20 s, dus de invoer van een
     # collega hoeft niet meteen zichtbaar te zijn. Je eigen invoer wél — die
-    # breekt de cache open. Zodra je zelf iets doet (hieronder: undo) staat het
-    # totaal weer helemaal bij.
+    # breekt de cache open.
     at.run()
     check(dagtotaal(at) == voor_collega,
-          f"scenario 3: invoer van een collega volgt binnen de cache-TTL "
+          f"scenario 4: invoer van een collega volgt binnen de cache-TTL "
           f"({dagtotaal(at)!r})")
     uitkomst(f"direct na eigen invoer  : {voor_collega}",
              f"vlak na invoer collega  : {dagtotaal(at)}  "
              f"(cache van 20 s — nog niet ververst)")
 
     at.button(key="undo").click().run()
-    check(any("275" in w.value for w in at.warning),
-          f"scenario 3: bevestiging noemt de eigen laatste invoer "
+    check(any("600" in w.value for w in at.warning),
+          f"scenario 4: bevestiging noemt de eigen laatste afspraak "
           f"({[w.value for w in at.warning]})")
     at.button(key="undo_ja").click().run()
     r = rijen(engine)
     bedragen = [float(x["bedrag"]) for x in r]
-    check(bedragen == [50.0],
-          f"scenario 3: eigen €275 weg, €50 van de collega blijft ({bedragen})")
-    check(dagtotaal(at) == "Vandaag: verkoop €50 · trades: 0",
-          f"scenario 3: dagtotaal loopt terug ({dagtotaal(at)!r})")
+    check(len(r) == 4 and 50.0 in bedragen,
+          f"scenario 4: beide regels van €600 weg, €50 van de collega blijft "
+          f"({bedragen})")
+    check(dagtotaal(at) == "Vandaag: verkoop €665 · trades: 0",
+          f"scenario 4: dagtotaal loopt terug ({dagtotaal(at)!r})")
     uitkomst(f"bevestiging             : {at.session_state['bevestiging']}",
              f"rijen na undo           : {bedragen}",
              f"dagtotaal na undo       : {dagtotaal(at)}")
@@ -371,10 +572,9 @@ def main():
     at.run()
     check(not at.exception, "app start zonder exception")
 
-    # --- geen naamkeuze meer: meteen invoeren -----------------------------
+    # --- geen naamkeuze: meteen invoeren ----------------------------------
     check("wie" not in at.session_state, "geen 'wie'-sessiestatus meer")
-    check(not [b for b in at.button if b.key and b.key.startswith("wie_")],
-          "geen naamkeuze-knoppen meer")
+    check(not knoppen(at, "wie_"), "geen naamkeuze-knoppen meer")
     check(bool(at.text_input(key="zoekterm")), "zoekbalk staat er direct bij het openen")
 
     # --- event aangemaakt -------------------------------------------------
@@ -389,24 +589,22 @@ def main():
     check(not any(sc.key == "modus" for sc in at.segmented_control),
           "met alleen VERKOOP is er geen moduskeuze te maken — balk blijft weg")
 
-    # --- zoeken + kiezen --------------------------------------------------
+    # --- zoeken -----------------------------------------------------------
     at.text_input(key="zoekterm").set_value("umbreon").run()
-    picks = [b for b in at.button if b.key and b.key.startswith("pick_")]
+    picks = knoppen(at, "pick_")
     check(len(picks) == 2, f"zoeken 'umbreon' geeft 2 treffers (kreeg {len(picks)})")
     check(any("450.00" in b.label for b in picks), "comp_prijs zichtbaar in resultaat")
     check(any("EVS" in b.label for b in picks), "set_code zichtbaar in resultaat")
 
     at.text_input(key="zoekterm").set_value("umbreon vmax").run()
-    picks = [b for b in at.button if b.key and b.key.startswith("pick_")]
-    check(len(picks) == 1, f"meerdere woorden filteren scherper (kreeg {len(picks)})")
+    check(len(knoppen(at, "pick_")) == 1, "meerdere woorden filteren scherper")
 
     at.text_input(key="zoekterm").set_value("pokemon center").run()
-    picks = [b for b in at.button if b.key and b.key.startswith("pick_")]
-    check(len(picks) == 1, "accent-ongevoelig zoeken (pokemon → Pokémon)")
+    check(len(knoppen(at, "pick_")) == 1, "accent-ongevoelig zoeken (pokemon → Pokémon)")
 
     # Gelijknamige kaarten zonder set_code: alleen te scheiden op staat/grade.
     at.text_input(key="zoekterm").set_value("blastoise").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    labels = [b.label for b in knoppen(at, "pick_")]
     check(not any("nan" in lb.lower() for lb in labels),
           f"geen 'nan' in resultaatregels bij lege set_code ({labels})")
     check(any("PSA 9" in lb for lb in labels) and any("GD" in lb for lb in labels),
@@ -414,61 +612,42 @@ def main():
     check(labels and "300.00" in labels[0],
           f"duurste variant staat bovenaan bij gelijke naam ({labels})")
 
-    # --- voorraad-indicator bij het zoekresultaat (feature 2) --------------
-    at.text_input(key="zoekterm").set_value("umbreon").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
-    check(any("3 op voorraad" in lb for lb in labels),
-          f"voorraad staat bij het zoekresultaat ({labels})")
-    check(any("1 op voorraad" in lb for lb in labels),
-          f"laatste exemplaar toont '1 op voorraad' ({labels})")
-
+    # --- voorraad-indicator bij het zoekresultaat -------------------------
     at.text_input(key="zoekterm").set_value("pikachu promo").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    labels = [b.label for b in knoppen(at, "pick_")]
     check(labels and "UITVERKOCHT" in labels[0],
           f"voorraad 0 toont UITVERKOCHT ({labels})")
 
-    # kiezen van een uitverkochte kaart mag, met een waarschuwing
-    at.button(key=knoppen(at, "pick_")[0].key).click().run()
-    tekst = " ".join(m.value for m in at.markdown)
-    check("UITVERKOCHT" in tekst, "gekozen kaart toont de voorraadstand")
-    check("vastleggen mag" in tekst.lower() or "klopt dan alleen niet" in tekst,
-          "uitverkocht blokkeert niet, maar waarschuwt wel")
-    check(not at.button(key="vastleggen").disabled,
-          "VASTLEGGEN blijft bruikbaar bij voorraad 0")
-    at.button(key="deselect").click().run()
-
     # --- slabs/sealed zonder comp_prijs: terugval op de cm-prijs -----------
     at.text_input(key="zoekterm").set_value("pika van gogh").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    labels = [b.label for b in knoppen(at, "pick_")]
     check(labels and "852.00" in labels[0],
           f"slab zonder comp toont de cm-prijs ({labels})")
     check(labels and "cm" in labels[0],
           f"cm-prijs is als zodanig gelabeld, niet als comp ({labels})")
     at.text_input(key="zoekterm").set_value("moltres").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    labels = [b.label for b in knoppen(at, "pick_")]
     check(labels and "330.00" in labels[0] and "€ ?" not in labels[0],
           f"sealed zonder comp toont de cm-prijs ({labels})")
     at.text_input(key="zoekterm").set_value("151 etb").run()
-    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    labels = [b.label for b in knoppen(at, "pick_")]
     check(labels and "500.00" in labels[0] and " cm" not in labels[0],
           f"comp gaat vóór cm en krijgt geen cm-label ({labels})")
 
-    at.text_input(key="zoekterm").set_value("shining gyarados").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(at.number_input(key="bedrag").value == 2300.00,
-          f"verkoop vult de cm-prijs voor (kreeg {at.number_input(key='bedrag').value})")
-    at.button(key="deselect").click().run()
+    kies(at, "shining gyarados")
+    check(prijsvelden(at)[0].value == 2300.00,
+          f"de cm-prijs wordt voorgevuld (kreeg {prijsvelden(at)[0].value})")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
 
-    at.text_input(key="zoekterm").set_value("umbreon vmax").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(at.session_state["sel"]["naam"] == "Umbreon VMAX (Alternate Art)",
-          "item geselecteerd")
-    check(at.number_input(key="bedrag").value == 450.00,
-          f"bedrag voorgevuld met comp_prijs (kreeg {at.number_input(key='bedrag').value})")
+    # --- vastleggen (overschreven bedrag) ---------------------------------
+    kies(at, "umbreon vmax")
+    check(at.session_state["mandje"][0]["naam"] == "Umbreon VMAX (Alternate Art)",
+          "kaart staat in het mandje")
+    check(prijsvelden(at)[0].value == 450.00,
+          f"prijs voorgevuld met comp_prijs (kreeg {prijsvelden(at)[0].value})")
     check(not knoppen(at, "pct_"), "geen inkoop-rekenhulp meer in de app")
 
-    # --- vastleggen (verkoop, overschreven bedrag) ------------------------
-    at.number_input(key="bedrag").set_value(430.0).run()
+    zet_prijs(at, 0, 430.0)
     at.button(key="vastleggen").click().run()
     check(not at.exception, "geen exception bij vastleggen")
     r = rijen(engine)
@@ -479,73 +658,65 @@ def main():
         check(float(t["bedrag"]) == 430.0, "overschreven bedrag opgeslagen")
         check(t["afzender"] == "TC", "afzender vast op 'TC'")
         check(t["item_id"] is not None, "item_id gekoppeld")
-        check(t["ruwe_tekst"] == "Umbreon VMAX (Alternate Art)", "ruwe_tekst = officiële naam")
+        check(t["ruwe_tekst"] == "Umbreon VMAX (Alternate Art)",
+              "ruwe_tekst = officiële naam")
         check(t["code"] == "EVS 215", f"code van de gezochte kaart bewaard ({t['code']!r})")
         check(t["event_id"] == ev[0][0], "gekoppeld aan het beurs-event")
         check(t["datum"] is not None and t["tijd"] is not None, "datum + tijd gevuld")
+        check(t["group_id"] is None, "losse verkoop van één kaart krijgt geen group_id")
 
     # --- reset + bevestiging ---------------------------------------------
-    check(at.session_state["sel"] is None, "formulier gereset na vastleggen")
-    check(at.session_state["bedrag"] == 0.0, "bedrag gereset")
+    check(at.session_state["mandje"] == [], "mandje leeg na vastleggen")
     bev = at.session_state["bevestiging"]
     check(bev == "✓ Umbreon VMAX (Alternate Art) — €430.00", f"korte bevestiging: {bev}")
     check(any("tc-ok" in m.value and bev in m.value for m in at.markdown),
           "bevestiging staat als vervagend blok op het scherm")
     check(dagtotaal(at) == "Vandaag: verkoop €430 · trades: 0",
           f"dagtotaal ververst na de verkoop ({dagtotaal(at)!r})")
-    check(rijen(engine)[0]["group_id"] is None,
-          "losse verkoop van één kaart krijgt geen group_id")
 
     # --- tweede invoer direct erna ---------------------------------------
-    at.text_input(key="zoekterm").set_value("charizard").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(at.number_input(key="bedrag").value == 120.0,
-          f"tweede kaart vult ook voor (kreeg {at.number_input(key='bedrag').value})")
-    at.number_input(key="bedrag").set_value(60.0).run()
+    kies(at, "charizard")
+    check(prijsvelden(at)[0].value == 120.0, "tweede kaart vult ook voor")
+    zet_prijs(at, 0, 60.0)
     at.button(key="vastleggen").click().run()
     r = rijen(engine)
     check(len(r) == 2, f"tweede invoer direct erna werkt (kreeg {len(r)} rijen)")
-    if len(r) == 2:
-        check(r[1]["type"] == "verkoop" and float(r[1]["bedrag"]) == 60.0,
-              "tweede invoer is verkoop van €60")
     check(dagtotaal(at) == "Vandaag: verkoop €490 · trades: 0",
           f"dagtotaal telt de tweede verkoop mee ({dagtotaal(at)!r})")
 
-    # --- kaart zonder prijs: gewoon zelf intikken ------------------------
-    at.text_input(key="zoekterm").set_value("bulbasaur").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(at.number_input(key="bedrag").value == 0.0,
-          "kaart zonder prijs begint op nul")
-    at.button(key="deselect").click().run()
-    check(len(rijen(engine)) == 2, "rondkijken schrijft niets weg")
+    # --- kaart zonder prijs ------------------------------------------------
+    kies(at, "bulbasaur")
+    check(prijsvelden(at)[0].value == 0.0, "kaart zonder prijs begint op nul")
+
+    # --- bedrag 0 wordt geweigerd ----------------------------------------
+    at.button(key="vastleggen").click().run()
+    check(len(rijen(engine)) == 2, "bedrag €0 wordt niet weggeschreven")
+    check(bool(at.error), "foutmelding getoond bij bedrag €0")
+    check(len(at.session_state["mandje"]) == 1, "invoer blijft staan na weigering")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
 
     # --- vangnet: vrij invoeren, mét losse code --------------------------
     at.text_input(key="vrij_naam").set_value("Japanse Eevee Heroes booster box").run()
     at.text_input(key="vrij_code").set_value("s6a").run()
-    at.number_input(key="vrij_bedrag").set_value(275.0).run()
     at.button(key="vrij_knop").click().run()
+    check(len(at.session_state["mandje"]) == 1, "vrije invoer komt in het mandje")
+    check(at.text_input(key="vrij_naam").value == "",
+          "naamveld leeg na toevoegen — meteen door")
+    zet_prijs(at, 0, 275.0)
+    at.button(key="vastleggen").click().run()
     r = rijen(engine)
     check(len(r) == 3, f"vrije invoer weggeschreven (kreeg {len(r)} rijen)")
     if len(r) == 3:
         v = r[2]
         check(v["item_id"] is None, "vrije invoer heeft item_id NULL")
         check(v["flag"] == "vrij ingevoerd", "flag = 'vrij ingevoerd'")
-        check(v["ruwe_tekst"] == "Japanse Eevee Heroes booster box", "ruwe_tekst = ingetypte naam")
+        check(v["ruwe_tekst"] == "Japanse Eevee Heroes booster box",
+              "ruwe_tekst = ingetypte naam")
         check(v["code"] == "s6a", f"losse code in de code-kolom ({v['code']!r})")
         check(v["afzender"] == "TC", "vrije invoer heeft afzender 'TC'")
         check(v["type"] == "verkoop", "vrije invoer is altijd een verkoop")
-    check(at.text_input(key="vrij_code").value == "", "code-veld leeg na vastleggen")
     check(not any(sc.key == "vrij_modus" for sc in at.segmented_control),
           "geen inkoop/verkoop-keuze meer bij vrij invoeren")
-
-    # --- bedrag 0 wordt geweigerd ----------------------------------------
-    at.text_input(key="zoekterm").set_value("pikachu").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    at.number_input(key="bedrag").set_value(0.0).run()
-    at.button(key="vastleggen").click().run()
-    check(len(rijen(engine)) == 3, "bedrag €0 wordt niet weggeschreven")
-    check(bool(at.error), "foutmelding getoond bij bedrag €0")
-    check(at.session_state["sel"] is not None, "invoer blijft staan na weigering")
 
     # --- laatste invoeren als compacte regels -----------------------------
     log = [m.value for m in at.markdown if 'class="tc-log"' in m.value]
@@ -560,9 +731,8 @@ def main():
     at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
     at2.run()
     check(not at2.exception, "tweede sessie start zonder exception")
-    at2.text_input(key="zoekterm").set_value("umbreon v").run()
-    at2.button(key=[b.key for b in at2.button if b.key.startswith("pick_")][0]).click().run()
-    at2.number_input(key="bedrag").set_value(40.0).run()
+    kies(at2, "umbreon v", "189")
+    zet_prijs(at2, 0, 40.0)
     at2.button(key="vastleggen").click().run()
     r = rijen(engine)
     check(len(r) == 4, f"invoer vanuit tweede sessie werkt (kreeg {len(r)} rijen)")
@@ -571,9 +741,8 @@ def main():
               "tweede sessie schrijft naar dezelfde database")
 
     # --- undo: alleen de eigen laatste invoer -----------------------------
-    at2.text_input(key="zoekterm").set_value("blastoise").run()
-    at2.button(key=knoppen(at2, "pick_")[0].key).click().run()
-    at2.number_input(key="bedrag").set_value(25.0).run()
+    kies(at2, "blastoise")
+    zet_prijs(at2, 0, 25.0)
     at2.button(key="vastleggen").click().run()
     check(len(rijen(engine)) == 5, "collega boekt er nog een verkoop tussendoor")
 
@@ -606,7 +775,9 @@ def main():
           f"tweede undo pakt de eigen vorige invoer (€60), niet die van de collega "
           f"({[float(x['bedrag']) for x in r]})")
 
+    mandje_tests(AppTest, db)
     nieuwe_features(AppTest, db)
+    kern_snel(AppTest, db)
     scenarios(AppTest, db)
 
     # --- schrijffout: invoer blijft behouden ------------------------------
