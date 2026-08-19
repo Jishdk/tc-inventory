@@ -1,8 +1,8 @@
 """TC beurs — snelle invoer voor op de beursvloer.
 
-Het team legt op de telefoon verkopen en inkopen vast. Elke invoer is één losse
-INSERT in `transactions`, gekoppeld aan één event. Er wordt niets afgeboekt uit
-`items` — alleen transacties vullen.
+Het team legt op de telefoon vast wat er de deur uit gaat: verkopen en trades.
+Elke invoer is een INSERT in `transactions`, gekoppeld aan één event. Er wordt
+niets afgeboekt uit `items` — dat doet `afboeken_sales.py` later.
 
     streamlit run beurs_app.py
 
@@ -14,15 +14,14 @@ Ontwerpkeuzes:
 - Schrijven gebeurt zonder automatische retry (pool_pre_ping vangt dode
   connecties al af). Faalt het toch, dan blijft de invoer staan met een
   duidelijke foutmelding — nooit stil falen.
-- VERKOOP is de snelste route en blijft ongewijzigd: zoek → tik → bedrag → weg.
-  De rekenhulp en de stapel-modus zitten alléén in INKOOP, waar de deal al rond
-  is en het om het vastleggen van het betaalde bedrag gaat.
+- INKOOP zit er bewust niet meer in. Wat er binnenkomt gaat via de inventaris,
+  niet via de beursvloer; de app houdt bij wat er wéggaat. Oude inkooprijen
+  blijven gewoon in de database staan en tellen mee in het dagtotaal.
 """
 
 from __future__ import annotations
 
 import html
-import math
 import os
 import sys
 import unicodedata
@@ -44,9 +43,9 @@ EVENT_LOCATIE = "Nijmegen"
 BEURSDAGEN = {date(2026, 8, 15), date(2026, 8, 16)}
 
 AFZENDER = "TC"          # één gedeelde gebruiker
-MODI = ["VERKOOP", "INKOOP"]
-INKOOP_MODI = ["Per kaart", "Totaal"]
-PERCENTAGES = (70, 75, 80)   # gebruikelijke inkooppercentages van de comp-prijs
+# TRADE komt er in een volgende stap bij; met één modus heeft de keuzebalk geen
+# functie en verbergen we 'm, zodat er niets tussen jou en het zoekveld staat.
+MODI = ["VERKOOP"]
 MAX_RESULTATEN = 10
 
 st.set_page_config(page_title="TC Beurs", page_icon="🃏", layout="centered")
@@ -91,7 +90,7 @@ BASIS_CSS = """
       font-size: 1.05rem; font-weight: 600;}
 
   /* Streamlit stapelt kolommen onder een telefoonbreedte; hier moeten ze juist
-     náást elkaar blijven (percentage-knoppen, stapelregels, ja/nee). */
+     náást elkaar blijven (de +/- stepper, ja/nee-vragen). */
   div[data-testid="stHorizontalBlock"] {flex-wrap: nowrap; gap: .5rem;}
   div[data-testid="stColumn"] {min-width: 0 !important;}
 
@@ -104,60 +103,34 @@ BASIS_CSS = """
       font-size: .92rem; opacity: .8; line-height: 1.4;}
   .tc-dag b {font-weight: 700; opacity: 1;}
 
-  /* per kaart / totaal: duidelijk ondergeschikt aan de hoofdtoggle */
-  .st-key-inkoop_modus div[data-testid="stSegmentedControl"] button {
-      min-height: 2.4rem; font-size: .92rem; font-weight: 500;}
-
   /* zoekbalk: prominent */
-  .st-key-zoekterm input, .st-key-stapel_zoek input {
-      font-size: 1.25rem !important; padding: .9rem .75rem !important;}
+  .st-key-zoekterm input {font-size: 1.25rem !important;
+      padding: .9rem .75rem !important;}
 
   /* zoekresultaten: naam vet, daaronder klein set + staat + prijs */
-  .st-key-resultaten div[data-testid="stVerticalBlock"],
-  .st-key-stapel_resultaten div[data-testid="stVerticalBlock"] {gap: .45rem;}
-  [class*="st-key-pick_"] button, [class*="st-key-add_"] button {
-      min-height: 3.5rem; padding: .6rem .9rem;}
-  [class*="st-key-pick_"] button > div, [class*="st-key-add_"] button > div {
-      width: 100%; justify-content: flex-start;}
-  [class*="st-key-pick_"] button p, [class*="st-key-add_"] button p {
+  .st-key-resultaten div[data-testid="stVerticalBlock"] {gap: .45rem;}
+  [class*="st-key-pick_"] button {min-height: 3.5rem; padding: .6rem .9rem;}
+  [class*="st-key-pick_"] button > div {width: 100%; justify-content: flex-start;}
+  [class*="st-key-pick_"] button p {
       white-space: pre-line; text-align: left;
       line-height: 1.35; font-size: 1.05rem; font-weight: 600; margin: 0;}
-  [class*="st-key-pick_"] button p span, [class*="st-key-add_"] button p span {
-      font-size: .82rem; font-weight: 400;}
+  [class*="st-key-pick_"] button p span {font-size: .82rem; font-weight: 400;}
 
-  /* rekenhulp (inkoop): kleine percentage-knoppen naast een vrij %-veld */
+  /* rekenregel onder het bedrag (3 × €15 = €45) */
   .tc-comp {font-size: .9rem; opacity: .7; margin: 0;}
-  [class*="st-key-pct_"] button {min-height: 2.9rem; padding: 0;
-      font-size: 1rem; font-weight: 600;}
-  .st-key-eigen_pct button {display: none;}   /* +/- steppers weg: te smal */
-  .st-key-eigen_pct input {text-align: center; font-size: 1rem;
-      padding: .7rem .3rem !important;}
-
-  /* stapel: elke regel is zelf de weg-knop — links uitgelijnd, één regel hoog */
-  [class*="st-key-weg_"] button {min-height: 2.8rem; padding: .4rem .8rem;
-      font-weight: 400;}
-  [class*="st-key-weg_"] button > div {width: 100%; justify-content: flex-start;}
-  [class*="st-key-weg_"] button p {margin: 0; font-size: 1rem; text-align: left;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-  .st-key-stapel_vrij_knop button {min-height: 3.1rem; font-size: .95rem;
-      font-weight: 600; padding: 0;}
-  .tc-teller {font-size: .9rem; font-weight: 600; opacity: .6;
-      margin: .3rem 0 -.35rem; letter-spacing: .02em;}
 
   /* bedrag: het getal is het belangrijkste op het scherm */
-  .st-key-bedrag input, .st-key-totaal_bedrag input {font-size: 2rem !important;
+  .st-key-bedrag input {font-size: 2rem !important;
       font-weight: 700; text-align: right; padding: .6rem .75rem !important;}
   .st-key-bedrag [data-testid="stNumberInputContainer"]::before,
-  .st-key-totaal_bedrag [data-testid="stNumberInputContainer"]::before,
   .st-key-vrij_bedrag [data-testid="stNumberInputContainer"]::before {
       content: "€"; align-self: center; padding-left: .8rem; font-weight: 700;
       opacity: .45;}
-  .st-key-bedrag [data-testid="stNumberInputContainer"]::before,
-  .st-key-totaal_bedrag [data-testid="stNumberInputContainer"]::before {
+  .st-key-bedrag [data-testid="stNumberInputContainer"]::before {
       font-size: 1.6rem;}
 
   /* VASTLEGGEN: grote knop onderaan */
-  .st-key-vastleggen button, .st-key-stapel_vastleggen button {
+  .st-key-vastleggen button {
       min-height: 4rem; font-size: 1.2rem; font-weight: 700; letter-spacing: .03em;}
 
   /* bevestiging: groot, kort, vervaagt vanzelf — en klapt daarna dicht, zodat
@@ -218,10 +191,10 @@ RETURNING id
 INSERT_TX = text("""
 INSERT INTO transactions (
     event_id, item_id, datum, tijd, kanaal, type, bedrag, afzender, flag,
-    ruwe_tekst, code, stuks
+    ruwe_tekst, code, stuks, group_id
 ) VALUES (
     :event_id, :item_id, :datum, :tijd, :kanaal, :type, :bedrag, :afzender,
-    :flag, :ruwe_tekst, :code, :stuks
+    :flag, :ruwe_tekst, :code, :stuks, :group_id
 )
 RETURNING id
 """)
@@ -308,19 +281,26 @@ def laatste_transacties(eid: int, versie: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=20, show_spinner=False)
-def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, float]:
-    """Som per type voor één dag. `versie` breekt de cache open na elke invoer,
-    zodat de balk bovenaan meteen meeloopt met wat je net hebt vastgelegd."""
+def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, dict]:
+    """Som én aantal per type voor één dag. `versie` breekt de cache open na elke
+    invoer, zodat de balk bovenaan meteen meeloopt met wat je net hebt vastgelegd.
+
+    Voor trades telt niet het bedrag maar het aantal *afspraken*: vier kaarten de
+    deur uit tegen wat kaarten terug is één trade, geen vier. Regels van dezelfde
+    trade delen een group_id; een losse regel zonder groep telt als één."""
     df = lees("""
-        SELECT t.type, COALESCE(SUM(t.bedrag), 0) AS som
+        SELECT t.type,
+               COALESCE(SUM(t.bedrag), 0) AS som,
+               COUNT(DISTINCT COALESCE(t.group_id, 'tx-' || t.id)) AS groepen
         FROM transactions t WHERE t.event_id = :eid AND t.datum = :dag
         GROUP BY t.type
     """, {"eid": eid, "dag": dag})
-    return {str(r["type"]): float(r["som"]) for _, r in df.iterrows()}
+    return {str(r["type"]): {"som": float(r["som"]), "groepen": int(r["groepen"])}
+            for _, r in df.iterrows()}
 
 
 def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
-                       code=None, stuks=1) -> int:
+                       code=None, stuks=1, group_id=None) -> int:
     """Eén losse insert. Geen retry: een dubbel geboekte verkoop is erger dan
     een foutmelding waarna je zelf opnieuw tikt.
 
@@ -330,7 +310,10 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
     `bedrag` is altijd het TOTAAL van de regel en `stuks` hoeveel kaarten dat
     dekt — dus 3 pakjes van €15 wordt bedrag 45, stuks 3. `afboeken_sales.py`
     haalt er `coalesce(stuks, 1)` van de voorraad af. Dit vervangt de oude
-    workaround waarbij het restant als regels van €0,01 werd geboekt."""
+    workaround waarbij het restant als regels van €0,01 werd geboekt.
+
+    `group_id` bindt de regels van één afspraak aan elkaar. NULL bij een losse
+    verkoop van één kaart — dat is nog steeds het normale geval."""
     nu = datetime.now()
     with engine().begin() as conn:
         return conn.execute(INSERT_TX, {
@@ -346,6 +329,7 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
             "ruwe_tekst": ruwe_tekst,
             "code": (code or "").strip() or None,
             "stuks": int(stuks or 1),
+            "group_id": group_id,
         }).scalar()
 
 
@@ -472,9 +456,7 @@ def als_dict(r) -> dict:
 
 def init_state():
     st.session_state.setdefault("modus", "VERKOOP")
-    st.session_state.setdefault("inkoop_modus", "Per kaart")
     st.session_state.setdefault("sel", None)          # gekozen item (dict)
-    st.session_state.setdefault("stapel", [])         # lijst voor de totaal-modus
     st.session_state.setdefault("mijn_invoeren", [])  # eigen inserts, voor undo
     st.session_state.setdefault("undo_vraag", False)
     st.session_state.setdefault("bevestiging", None)
@@ -483,23 +465,13 @@ def init_state():
     st.session_state.setdefault("stuks", 1)           # aantal kaarten in deze regel
     st.session_state.setdefault("prijs_modus", "Per stuk")
     st.session_state.setdefault("dubbel_vraag", None)  # wacht op "toch vastleggen"
-    if st.session_state.pop("_leeg_zoek", False):
-        st.session_state["stapel_zoek"] = ""
-        st.session_state["stapel_vrij"] = ""
-        st.session_state["stapel_code"] = ""
     if st.session_state.pop("_reset", False):
         st.session_state["sel"] = None
         st.session_state["zoekterm"] = ""
         st.session_state["bedrag"] = 0.0
-        st.session_state["eigen_pct"] = None
         st.session_state["vrij_naam"] = ""
         st.session_state["vrij_code"] = ""
         st.session_state["vrij_bedrag"] = 0.0
-        st.session_state["stapel"] = []
-        st.session_state["stapel_zoek"] = ""
-        st.session_state["stapel_vrij"] = ""
-        st.session_state["stapel_code"] = ""
-        st.session_state["totaal_bedrag"] = 0.0
         st.session_state["stuks"] = 1
         st.session_state["prijs_modus"] = "Per stuk"
         st.session_state["dubbel_vraag"] = None
@@ -523,13 +495,11 @@ def totaalbedrag() -> float:
 
 
 def prefill_bedrag():
-    """Bij verkoop de bekende prijs voorinvullen, bij inkoop leeg (0,00)."""
+    """De bekende prijs voorinvullen — meestal is dat precies de vraagprijs, dus
+    scheelt het intikken. Blijft gewoon een invoerveld: overschrijven mag."""
     sel = st.session_state.get("sel")
-    prijs = 0.0
-    if sel and st.session_state["modus"] == "VERKOOP" and sel.get("prijs"):
-        prijs = float(sel["prijs"])
-    st.session_state["bedrag"] = prijs
-    st.session_state["eigen_pct"] = None
+    st.session_state["bedrag"] = (
+        float(sel["prijs"]) if sel and sel.get("prijs") else 0.0)
 
 
 def kies_item(rij: dict):
@@ -540,21 +510,6 @@ def kies_item(rij: dict):
     st.session_state["prijs_modus"] = "Per stuk"
     st.session_state["dubbel_vraag"] = None
     prefill_bedrag()
-
-
-def reken_percentage(pct: float):
-    """Bedrag = comp × percentage, afgerond op hele euro's (half naar boven).
-
-    Zet alleen de waarde van het bedrag-veld: daarna is het gewoon weer een
-    invoerveld, dus altijd met de hand te overschrijven."""
-    sel = st.session_state.get("sel")
-    if not sel or not sel.get("prijs") or not pct:
-        return
-    st.session_state["bedrag"] = float(math.floor(sel["prijs"] * pct / 100 + 0.5))
-
-
-def reken_eigen_percentage():
-    reken_percentage(st.session_state.get("eigen_pct") or 0)
 
 
 def na_succes(naam: str, bedrag: float, tx_id: int | None = None):
@@ -578,14 +533,13 @@ def meld_fout(melding: str, detail: str):
 init_state()
 
 # ------------------------------------------------------------------ stijl
-# Kleur per modus: verkoop groen, inkoop rood (het TC-rood). Eén blik op de knop
-# is genoeg om te zien wát je aan het boeken bent. De modus staat al in
-# session_state vóór het script draait, dus dit kan in hetzelfde <style>-blok.
+# Kleur per modus. Eén blik op de knop is genoeg om te zien wát je aan het boeken
+# bent. De modus staat al in session_state vóór het script draait, dus dit kan in
+# hetzelfde <style>-blok als de basis-CSS — één element, geen extra witruimte.
 
-MODUS_KLEUR = {"VERKOOP": "#1B9E4B", "INKOOP": "#F20519"}
+MODUS_KLEUR = {"VERKOOP": "#1B9E4B"}
 _modus = st.session_state.get("modus") or "VERKOOP"
-_vrij_modus = st.session_state.get("vrij_modus") or _modus
-KLEUR, VRIJ_KLEUR = MODUS_KLEUR[_modus], MODUS_KLEUR[_vrij_modus]
+KLEUR = VRIJ_KLEUR = MODUS_KLEUR[_modus]
 
 EXTRA_CSS = """
   /* voorraad bij de gekozen kaart */
@@ -606,8 +560,7 @@ st.markdown(f"""<style>
 {EXTRA_CSS}
   /* :not(:disabled) — een uitgeschakelde knop moet grijs blijven, anders lijkt
      'ie klaar voor gebruik terwijl er nog geen kaart gekozen is. */
-  .st-key-vastleggen button:not(:disabled),
-  .st-key-stapel_vastleggen button:not(:disabled) {{
+  .st-key-vastleggen button:not(:disabled) {{
       background: {KLEUR} !important; border-color: {KLEUR} !important;
       color: #fff !important;}}
   .st-key-vrij_knop button:not(:disabled) {{background: {VRIJ_KLEUR} !important;
@@ -639,28 +592,33 @@ except SQLAlchemyError:
     totalen = None      # database plat: de foutmelding komt hieronder al
 
 if totalen is not None:
-    binnen, uit = totalen.get("verkoop", 0.0), totalen.get("inkoop", 0.0)
-    netto = binnen - uit
-    teken = "−" if netto < 0 else ""      # min vóór het euroteken leest rustiger
-    st.markdown(
-        f'<div class="tc-dag">Vandaag: <b>€{geld(binnen)}</b> in &nbsp;·&nbsp; '
-        f'<b>€{geld(uit)}</b> uit &nbsp;·&nbsp; netto <b>{teken}€{geld(abs(netto))}</b>'
-        f'</div>', unsafe_allow_html=True)
+    # Verkoop in euro's, trades in aantallen: bij een trade is het bedrag alleen
+    # het verschil dat er cash bij komt of af gaat, dus een som van euro's zou
+    # onderschatten hoeveel er die dag over tafel is gegaan.
+    verkoop = totalen.get("verkoop", {}).get("som", 0.0)
+    trades = totalen.get("trade", {})
+    n_trades, cash = trades.get("groepen", 0), trades.get("som", 0.0)
+    cash_teken = "−" if cash < 0 else "+"
+    regel = (f'Vandaag: verkoop <b>€{geld(verkoop)}</b> &nbsp;·&nbsp; '
+             f'trades: <b>{n_trades}</b>')
+    if n_trades:
+        regel += f' (cash {cash_teken}€{geld(abs(cash))})'
+    # Inkoop kan de app niet meer boeken; wat er uit een oudere versie of uit de
+    # WhatsApp-import staat, laten we wél zien — anders lijkt de dag onvolledig.
+    inkoop = totalen.get("inkoop", {}).get("som", 0.0)
+    if inkoop:
+        regel += f' &nbsp;·&nbsp; inkoop <b>€{geld(inkoop)}</b>'
+    st.markdown(f'<div class="tc-dag">{regel}</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ modus
 
-st.segmented_control("Wat leg je vast?", MODI, key="modus", width="stretch",
-                     on_change=prefill_bedrag, label_visibility="collapsed",
-                     required=True)
+# Eén modus = geen keuze te maken; de balk verschijnt zodra TRADE erbij komt.
+if len(MODI) > 1:
+    st.segmented_control("Wat leg je vast?", MODI, key="modus", width="stretch",
+                         on_change=prefill_bedrag, label_visibility="collapsed",
+                         required=True)
 MODUS = st.session_state["modus"] or "VERKOOP"
-TX_TYPE = "verkoop" if MODUS == "VERKOOP" else "inkoop"
-
-if MODUS == "INKOOP":
-    st.segmented_control("Hoe reken je af?", INKOOP_MODI, key="inkoop_modus",
-                         width="stretch", label_visibility="collapsed", required=True)
-INKOOP_MODUS = (st.session_state.get("inkoop_modus") or "Per kaart"
-                if MODUS == "INKOOP" else "Per kaart")
-STAPEL_MODUS = MODUS == "INKOOP" and INKOOP_MODUS == "Totaal"
+TX_TYPE = "verkoop"
 
 if VANDAAG not in BEURSDAGEN:
     # Klein en grijs: het is een terzijde, geen waarschuwing — de invoer telt gewoon.
@@ -695,231 +653,134 @@ try:
 except SQLAlchemyError:
     recent_voor_check = None
 
-if STAPEL_MODUS:
-    # --- stapel: meerdere kaarten, één totaalbedrag ------------------------
-    # Eén transactie met item_id NULL: een stapel hangt per definitie aan meer
-    # dan één kaart. Wát erin zat staat in ruwe_tekst, het totaal is leidend.
-    stapel = st.session_state["stapel"]
+# ------------------------------------------------------------------ invoer
 
-    st.text_input("Zoek kaart", key="stapel_zoek",
-                  placeholder="zoek kaart om toe te voegen",
-                  label_visibility="collapsed")
-    term = st.session_state.get("stapel_zoek", "")
-    if len(term.strip()) >= 2:
-        gekozen = toon_treffers(items, term, "add_", "stapel_resultaten",
-                                "Niets gevonden — typ de naam hieronder.")
-        if gekozen is not None:
-            stapel.append({"id": int(gekozen["id"]), "naam": gekozen["naam"],
-                           "code": kenmerk(gekozen)})
-            st.session_state["_leeg_zoek"] = True
-            st.rerun()
+# --- per kaart: zoeken, kiezen, bedrag ---------------------------------
+sel = st.session_state["sel"]
 
-    # Vrij toevoegen: de naam is het langste veld en krijgt een eigen regel,
-    # code + knop eronder. Zo blijft het op telefoonbreedte twee nette rijen.
-    st.text_input("Vrij toevoegen", key="stapel_vrij",
-                  placeholder="of typ zelf een naam", label_visibility="collapsed")
-    kol_code, kol_plus = st.columns([2, 1], vertical_alignment="center")
-    kol_code.text_input("Code", key="stapel_code", placeholder="code (optioneel)",
-                        label_visibility="collapsed")
-    if kol_plus.button("+ toevoegen", key="stapel_vrij_knop", width="stretch"):
-        naam = (st.session_state.get("stapel_vrij") or "").strip()
-        if naam:
-            stapel.append({"id": None, "naam": naam,
-                           "code": (st.session_state.get("stapel_code") or "").strip()})
-            st.session_state["_leeg_zoek"] = True
-            st.rerun()
-
-    st.markdown(f'<div class="tc-teller">Stapel: <b>{len(stapel)}</b> '
-                f'{"kaart" if len(stapel) == 1 else "kaarten"}</div>',
-                unsafe_allow_html=True)
-
-    if stapel:
-        # Elke regel is zelf de weg-knop: één tap haalt 'm eruit. Scheelt een
-        # kolommen-layout die op een telefoon toch uit elkaar valt.
-        for i, kaart in enumerate(stapel):
-            regel = f"{i + 1}. {kaart['naam']}"
-            if kaart.get("code"):
-                regel += f" · {kaart['code']}"
-            if st.button(f"✕  {regel}", key=f"weg_{i}", width="stretch"):
-                stapel.pop(i)
-                st.rerun()
-        st.caption("Tik een kaart om 'm uit de stapel te halen.")
-    else:
-        st.caption("Nog leeg — zoek een kaart, of typ zelf een naam en tik "
-                   "**+ toevoegen**.")
-
-    st.number_input("Totaalbedrag", min_value=0.0, step=0.50, format="%.2f",
-                    key="totaal_bedrag", label_visibility="collapsed")
-
-    if st.button(f"VASTLEGGEN — STAPEL ({len(stapel)})", type="primary",
-                 width="stretch", disabled=not stapel,
-                 key="stapel_vastleggen") and stapel:
-        totaal = float(st.session_state["totaal_bedrag"])
-        if totaal <= 0:
-            meld_fout("Vul een totaalbedrag in.", "geen database-actie uitgevoerd")
-        else:
-            # Naam mét code per kaart, zodat de regel later nog te herleiden is.
-            namen = " · ".join(
-                f"{k['naam']} [{k['code']}]" if k.get("code") else k["naam"]
-                for k in stapel)
-            omschrijving = f"Stapel {len(stapel)} kaarten: {namen}"
-            try:
-                tx = schrijf_transactie(item_id=None, bedrag=totaal, tx_type="inkoop",
-                                        ruwe_tekst=omschrijving, flag="stapel")
-                na_succes(f"stapel ({len(stapel)} kaarten)", totaal, tx)
-            except SQLAlchemyError as e:
-                engine().dispose()
-                meld_fout(f"NIET vastgelegd: stapel €{totaal:,.2f}. "
-                          "Je stapel staat er nog — probeer opnieuw.", str(e)[:800])
-
+if sel:
+    regels = [x for x in [sel.get("kenmerk"), sel.get("conditie")] if x]
+    st.markdown(f"### {sel['naam']}")
+    if regels:
+        st.caption(" · ".join(regels))
+    voorraad = int(sel.get("aantal", 0))
+    st.markdown(f'<div class="{voorraad_klasse(voorraad)}">'
+                f'{voorraad_tekst(voorraad)}</div>', unsafe_allow_html=True)
+    if voorraad <= 0:
+        # Waarschuwen, niet blokkeren: de voorraadstand loopt achter zodra
+        # er buiten de app om iets is verkocht of bijgekocht.
+        st.markdown('<div class="tc-note">Staat op nul of lager — vastleggen '
+                    'mag, de voorraad klopt dan alleen niet.</div>',
+                    unsafe_allow_html=True)
+    if st.button("✕ andere kaart", key="deselect"):
+        st.session_state["sel"] = None
+        st.rerun()
 else:
-    # --- per kaart: zoeken, kiezen, bedrag ---------------------------------
-    sel = st.session_state["sel"]
-
-    if sel:
-        regels = [x for x in [sel.get("kenmerk"), sel.get("conditie")] if x]
-        st.markdown(f"### {sel['naam']}")
-        if regels:
-            st.caption(" · ".join(regels))
-        voorraad = int(sel.get("aantal", 0))
-        st.markdown(f'<div class="{voorraad_klasse(voorraad)}">'
-                    f'{voorraad_tekst(voorraad)}</div>', unsafe_allow_html=True)
-        if voorraad <= 0:
-            # Waarschuwen, niet blokkeren: de voorraadstand loopt achter zodra
-            # er buiten de app om iets is verkocht of bijgekocht.
-            st.markdown('<div class="tc-note">Staat op nul of lager — vastleggen '
-                        'mag, de voorraad klopt dan alleen niet.</div>',
-                        unsafe_allow_html=True)
-        if st.button("✕ andere kaart", key="deselect"):
-            st.session_state["sel"] = None
+    st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
+                  label_visibility="collapsed")
+    term = st.session_state.get("zoekterm", "")
+    if len(term.strip()) >= 2:
+        gekozen = toon_treffers(items, term, "pick_", "resultaten",
+                                "Niets gevonden — gebruik *vrij invoeren* hieronder.")
+        if gekozen is not None:
+            kies_item(als_dict(gekozen))
             st.rerun()
+
+# --- aantal -----------------------------------------------------------
+# Blijft één tik voor het gewone geval: de teller staat op 1 en je hoeft er
+# niets aan te doen. Pas bij meerdere stuks komt de per-stuk/totaal-keuze
+# tevoorschijn, zodat de kernflow niet langer wordt voor de 90% die er één
+# verkoopt.
+n_stuks = max(1, int(st.session_state.get("stuks", 1)))
+kol_min, kol_n, kol_plus = st.columns([1, 2, 1], vertical_alignment="center")
+kol_min.button("−", key="stuks_min", width="stretch", disabled=n_stuks <= 1,
+               on_click=stuks_bij, args=(-1,))
+kol_n.markdown(f'<div class="tc-stuks">{n_stuks}&nbsp;×</div>',
+               unsafe_allow_html=True)
+kol_plus.button("+", key="stuks_plus", width="stretch",
+                on_click=stuks_bij, args=(1,))
+
+if n_stuks > 1:
+    st.segmented_control("Bedrag is", ["Per stuk", "Totaal"], key="prijs_modus",
+                         width="stretch", label_visibility="collapsed",
+                         required=True)
+
+st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f", key="bedrag",
+                label_visibility="collapsed")
+
+TOTAAL = totaalbedrag()
+if n_stuks > 1 and TOTAAL > 0:
+    per = TOTAAL / n_stuks
+    st.markdown(f'<div class="tc-comp">{n_stuks} × €{geld(per)} = '
+                f'<b>€{geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
+
+# --- dubbel-waarschuwing ---------------------------------------------
+vraag = st.session_state.get("dubbel_vraag")
+if vraag:
+    st.markdown(f'<div class="tc-dubbel">Net al ingevoerd: {vraag["naam"]} '
+                f'€{geld(vraag["bedrag"])} om {vraag["tijd"]} '
+                f'({vraag["seconden"]} s geleden) — toch vastleggen?</div>',
+                unsafe_allow_html=True)
+    kol_ja, kol_nee = st.columns(2)
+    bevestigd = kol_ja.button("Ja, toch vastleggen", key="dubbel_ja",
+                              type="primary", width="stretch")
+    if kol_nee.button("Nee, laat maar", key="dubbel_nee", width="stretch"):
+        st.session_state["dubbel_vraag"] = None
+        st.rerun()
+else:
+    bevestigd = False
+
+klik = st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
+                 disabled=sel is None or bool(vraag), key="vastleggen")
+
+if (klik or bevestigd) and sel:
+    if TOTAAL <= 0:
+        meld_fout("Vul een bedrag in.", "geen database-actie uitgevoerd")
     else:
-        st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
-                      label_visibility="collapsed")
-        term = st.session_state.get("zoekterm", "")
-        if len(term.strip()) >= 2:
-            gekozen = toon_treffers(items, term, "pick_", "resultaten",
-                                    "Niets gevonden — gebruik *vrij invoeren* hieronder.")
-            if gekozen is not None:
-                kies_item(als_dict(gekozen))
-                st.rerun()
-
-    # rekenhulp: alleen bij inkoop, en alleen als er een comp-prijs is om
-    # vanaf te rekenen. Geen comp → gewoon het bedrag intikken.
-    if MODUS == "INKOOP" and sel and sel.get("prijs"):
-        comp = float(sel["prijs"])
-        label = "comp" if sel.get("prijs_bron") == "comp" else "cm"
-        st.markdown(f'<div class="tc-comp">{label} €{geld(comp)} — betaald:</div>',
-                    unsafe_allow_html=True)
-        kolommen = st.columns([1, 1, 1, 1.3], vertical_alignment="center")
-        for kolom, pct in zip(kolommen, PERCENTAGES):
-            if kolom.button(f"{pct}%", key=f"pct_{pct}", width="stretch"):
-                reken_percentage(pct)
-        with kolommen[3]:
-            st.number_input("Eigen percentage", min_value=1, max_value=100, step=1,
-                            value=None, key="eigen_pct", placeholder="…%",
-                            on_change=reken_eigen_percentage,
-                            label_visibility="collapsed")
-
-    # --- aantal -----------------------------------------------------------
-    # Blijft één tik voor het gewone geval: de teller staat op 1 en je hoeft er
-    # niets aan te doen. Pas bij meerdere stuks komt de per-stuk/totaal-keuze
-    # tevoorschijn, zodat de kernflow niet langer wordt voor de 90% die er één
-    # verkoopt.
-    n_stuks = max(1, int(st.session_state.get("stuks", 1)))
-    kol_min, kol_n, kol_plus = st.columns([1, 2, 1], vertical_alignment="center")
-    kol_min.button("−", key="stuks_min", width="stretch", disabled=n_stuks <= 1,
-                   on_click=stuks_bij, args=(-1,))
-    kol_n.markdown(f'<div class="tc-stuks">{n_stuks}&nbsp;×</div>',
-                   unsafe_allow_html=True)
-    kol_plus.button("+", key="stuks_plus", width="stretch",
-                    on_click=stuks_bij, args=(1,))
-
-    if n_stuks > 1:
-        st.segmented_control("Bedrag is", ["Per stuk", "Totaal"], key="prijs_modus",
-                             width="stretch", label_visibility="collapsed",
-                             required=True)
-
-    st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f", key="bedrag",
-                    label_visibility="collapsed")
-
-    TOTAAL = totaalbedrag()
-    if n_stuks > 1 and TOTAAL > 0:
-        per = TOTAAL / n_stuks
-        st.markdown(f'<div class="tc-comp">{n_stuks} × €{geld(per)} = '
-                    f'<b>€{geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
-
-    # --- dubbel-waarschuwing ---------------------------------------------
-    vraag = st.session_state.get("dubbel_vraag")
-    if vraag:
-        st.markdown(f'<div class="tc-dubbel">Net al ingevoerd: {vraag["naam"]} '
-                    f'€{geld(vraag["bedrag"])} om {vraag["tijd"]} '
-                    f'({vraag["seconden"]} s geleden) — toch vastleggen?</div>',
-                    unsafe_allow_html=True)
-        kol_ja, kol_nee = st.columns(2)
-        bevestigd = kol_ja.button("Ja, toch vastleggen", key="dubbel_ja",
-                                  type="primary", width="stretch")
-        if kol_nee.button("Nee, laat maar", key="dubbel_nee", width="stretch"):
-            st.session_state["dubbel_vraag"] = None
+        al_gezien = lijkt_dubbel(recent_voor_check, sel["id"], TOTAAL,
+                                 sel["naam"]) if klik else None
+        if al_gezien:
+            st.session_state["dubbel_vraag"] = {
+                "naam": sel["naam"], "bedrag": TOTAAL, **al_gezien}
             st.rerun()
-    else:
-        bevestigd = False
+        try:
+            tx = schrijf_transactie(item_id=sel["id"], bedrag=TOTAAL,
+                                    tx_type=TX_TYPE, ruwe_tekst=sel["naam"],
+                                    code=sel.get("kenmerk"), stuks=n_stuks)
+            label = sel["naam"] if n_stuks == 1 else f"{n_stuks}× {sel['naam']}"
+            na_succes(label, TOTAAL, tx)
+        except SQLAlchemyError as e:
+            engine().dispose()
+            meld_fout(f"NIET vastgelegd: {sel['naam']} €{TOTAAL:,.2f}. "
+                      "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
 
-    klik = st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
-                     disabled=sel is None or bool(vraag), key="vastleggen")
-
-    if (klik or bevestigd) and sel:
-        if TOTAAL <= 0:
-            meld_fout("Vul een bedrag in.", "geen database-actie uitgevoerd")
+# --- vangnet ----------------------------------------------------------
+with st.expander("Kaart staat er niet in → vrij invoeren"):
+    st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
+                  label_visibility="collapsed")
+    # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
+    # aan de inventaris te koppelen — hij heeft geen item_id.
+    st.text_input("Code", key="vrij_code",
+                  placeholder="code, bijv. 173/195 of swsh260 (mag leeg)",
+                  label_visibility="collapsed")
+    st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f",
+                    key="vrij_bedrag", label_visibility="collapsed")
+    if st.button("VASTLEGGEN", type="primary", width="stretch", key="vrij_knop"):
+        naam = (st.session_state.get("vrij_naam") or "").strip()
+        vb = float(st.session_state.get("vrij_bedrag") or 0)
+        if not naam or vb <= 0:
+            st.error("Vul een naam én een bedrag in.")
         else:
-            al_gezien = lijkt_dubbel(recent_voor_check, sel["id"], TOTAAL,
-                                     sel["naam"]) if klik else None
-            if al_gezien:
-                st.session_state["dubbel_vraag"] = {
-                    "naam": sel["naam"], "bedrag": TOTAAL, **al_gezien}
-                st.rerun()
             try:
-                tx = schrijf_transactie(item_id=sel["id"], bedrag=TOTAAL,
-                                        tx_type=TX_TYPE, ruwe_tekst=sel["naam"],
-                                        code=sel.get("kenmerk"), stuks=n_stuks)
-                label = sel["naam"] if n_stuks == 1 else f"{n_stuks}× {sel['naam']}"
-                na_succes(label, TOTAAL, tx)
+                tx = schrijf_transactie(
+                    item_id=None, bedrag=vb, tx_type=TX_TYPE,
+                    ruwe_tekst=naam, flag="vrij ingevoerd",
+                    code=st.session_state.get("vrij_code"))
+                na_succes(naam, vb, tx)
             except SQLAlchemyError as e:
                 engine().dispose()
-                meld_fout(f"NIET vastgelegd: {sel['naam']} €{TOTAAL:,.2f}. "
+                meld_fout(f"NIET vastgelegd: {naam} €{vb:,.2f}. "
                           "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
-
-    # --- vangnet ----------------------------------------------------------
-    with st.expander("Kaart staat er niet in → vrij invoeren"):
-        st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
-                      label_visibility="collapsed")
-        # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
-        # aan de inventaris te koppelen — hij heeft geen item_id.
-        st.text_input("Code", key="vrij_code",
-                      placeholder="code, bijv. 173/195 of swsh260 (mag leeg)",
-                      label_visibility="collapsed")
-        st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f",
-                        key="vrij_bedrag", label_visibility="collapsed")
-        vrij_type = st.segmented_control("Soort", MODI, key="vrij_modus", default=MODUS,
-                                         required=True, width="stretch",
-                                         label_visibility="collapsed") or MODUS
-        if st.button("VASTLEGGEN", type="primary", width="stretch", key="vrij_knop"):
-            naam = (st.session_state.get("vrij_naam") or "").strip()
-            vb = float(st.session_state.get("vrij_bedrag") or 0)
-            if not naam or vb <= 0:
-                st.error("Vul een naam én een bedrag in.")
-            else:
-                try:
-                    tx = schrijf_transactie(
-                        item_id=None, bedrag=vb,
-                        tx_type="verkoop" if vrij_type == "VERKOOP" else "inkoop",
-                        ruwe_tekst=naam, flag="vrij ingevoerd",
-                        code=st.session_state.get("vrij_code"))
-                    na_succes(naam, vb, tx)
-                except SQLAlchemyError as e:
-                    engine().dispose()
-                    meld_fout(f"NIET vastgelegd: {naam} €{vb:,.2f}. "
-                              "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
 
 # ------------------------------------------------------------------ undo
 
@@ -962,7 +823,7 @@ if recent is not None and not recent.empty:
     regels = []
     for _, r in recent.iterrows():
         bedrag = float(pd.to_numeric(r["bedrag"], errors="coerce") or 0)
-        teken = "−" if r["type"] == "inkoop" else "+"
+        teken = "−" if str(r["type"]) == "inkoop" else "+"
         regels.append(f'{str(r["tijd"])[:5]} &nbsp; <b>{teken}€{geld(bedrag)}</b> '
                       f'&nbsp; {html.escape(str(r["ruwe_tekst"])[:38])}')
     st.markdown(f'<div class="tc-log">{"<br>".join(regels)}</div>',

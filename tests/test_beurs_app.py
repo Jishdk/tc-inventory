@@ -3,7 +3,7 @@
 
 Zo is de invoerflow te testen zonder database-verbinding: zoeken, item kiezen,
 bedrag, VASTLEGGEN, vrij invoeren, twee invoeren snel na elkaar, het live
-dagtotaal, de inkoop-rekenhulp, de stapel (totaal-modus) en undo.
+dagtotaal, aantallen, de voorraad-indicator, de dubbel-check en undo.
 
     python tests/test_beurs_app.py
 """
@@ -47,7 +47,8 @@ CREATE TABLE transactions (
     type TEXT NOT NULL, bedrag NUMERIC, afzender TEXT, media_file TEXT,
     flag TEXT, ruwe_tekst TEXT, code TEXT, stuks INTEGER,
     is_dubbel BOOLEAN NOT NULL DEFAULT 0, opschoon_notitie TEXT,
-    afgeboekt_op TIMESTAMP);
+    afgeboekt_op TIMESTAMP, group_id TEXT,
+    onderhandeld BOOLEAN NOT NULL DEFAULT 0);
 """
 
 # Zoals de echte data: lege set_code komt voor (187 van 572) en namen zijn dubbel (54x).
@@ -88,7 +89,7 @@ def check(voorwaarde, omschrijving):
 
 
 def dagtotaal(at) -> str:
-    """De balk bovenaan als platte tekst: 'Vandaag: €430 in · €60 uit · netto €370'."""
+    """De balk bovenaan als platte tekst: 'Vandaag: verkoop €430 · trades: 0'."""
     balk = [m.value for m in at.markdown if 'class="tc-dag"' in m.value]
     if not balk:
         return ""
@@ -129,8 +130,8 @@ def rijen(engine):
     with engine.connect() as c:
         return c.execute(text(
             "SELECT id, event_id, item_id, datum, tijd, kanaal, type, bedrag, "
-            "afzender, flag, ruwe_tekst, code, stuks FROM transactions "
-            "ORDER BY id")).mappings().all()
+            "afzender, flag, ruwe_tekst, code, stuks, group_id "
+            "FROM transactions ORDER BY id")).mappings().all()
 
 
 def toon(rij) -> str:
@@ -268,9 +269,9 @@ def nieuwe_features(AppTest, db):
 
 
 def scenarios(AppTest, db):
-    """Vier scenario's die de vragen uit de opdracht beantwoorden, met een
-    leesbaar 'verwacht → resultaat' per stap. Draait op een eigen verse
-    database, zodat de bedragen in het verslag niet door de rookproef lopen."""
+    """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
+    'verwacht → resultaat' per stap. Draait op een eigen verse database, zodat de
+    bedragen in het verslag niet door de rookproef lopen."""
     import streamlit as st
 
     engine = maak_engine()
@@ -285,44 +286,21 @@ def scenarios(AppTest, db):
     at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
     at.run()
 
-    # --- 1. meerdere kaarten in één stapel-transactie ----------------------
-    kop("1.", "Kan ik meerdere kaarten in één stapel-transactie zetten?",
-        "3 kaarten toevoegen → 1 inkoop-rij van €185, namen + codes bewaard")
-    at.session_state["modus"] = "INKOOP"
-    at.session_state["inkoop_modus"] = "Totaal"
-    at.run()
-    at.text_input(key="stapel_zoek").set_value("umbreon vmax").run()
-    at.button(key=knoppen(at, "add_")[0].key).click().run()
-    at.text_input(key="stapel_zoek").set_value("charizard").run()
-    at.button(key=knoppen(at, "add_")[0].key).click().run()
-    at.text_input(key="stapel_vrij").set_value("Bulk commons ±200 kaarten").run()
-    at.text_input(key="stapel_code").set_value("diverse").run()
-    at.button(key="stapel_vrij_knop").click().run()
-    check(len(at.session_state["stapel"]) == 3, "scenario 1: 3 kaarten in de stapel")
-    check("(3)" in at.button(key="stapel_vastleggen").label,
-          "scenario 1: knop toont het aantal")
-    at.number_input(key="totaal_bedrag").set_value(185.0).run()
-    at.button(key="stapel_vastleggen").click().run()
-
-    r = rijen(engine)
-    check(len(r) == 1, "scenario 1: precies één transactie")
-    check(r and float(r[0]["bedrag"]) == 185.0 and r[0]["type"] == "inkoop",
-          "scenario 1: inkoop van €185")
-    check(r and r[0]["item_id"] is None and r[0]["flag"] == "stapel",
-          "scenario 1: item_id NULL, flag 'stapel'")
-    check(r and all(x in r[0]["ruwe_tekst"] for x in
-                    ("Umbreon VMAX", "EVS 215", "Charizard ex", "OBF 223",
-                     "Bulk commons", "diverse")),
-          "scenario 1: alle namen én codes staan in ruwe_tekst")
-    uitkomst(f"{len(r)} rij in de database", toon(r[0]))
-    check(at.session_state["stapel"] == [], "scenario 1: stapel leegt zichzelf")
-    uitkomst("stapel na vastleggen: leeg") if not at.session_state["stapel"] else None
+    # --- 1. inkoop is er niet meer ----------------------------------------
+    kop("1.", "Kan er nog inkoop geboekt worden?",
+        "geen INKOOP-modus, geen soort-keuze bij vrij invoeren, geen rekenhulp")
+    modi = [sc.key for sc in at.segmented_control]
+    check("modus" not in modi and "inkoop_modus" not in modi,
+          f"scenario 1: geen modus-/inkoopkeuze meer ({modi})")
+    check("vrij_modus" not in modi, "scenario 1: vrij invoeren kent geen soort meer")
+    check(not knoppen(at, "pct_") and not knoppen(at, "add_"),
+          "scenario 1: rekenhulp en stapel zijn weg")
+    uitkomst(f"segmented controls op het scherm: {modi or '(geen)'}",
+             f"dagtotaal: {dagtotaal(at)}")
 
     # --- 2. vrije invoer met code -----------------------------------------
     kop("2.", "Belandt de code van een vrij ingevoerde kaart in de code-kolom?",
         "naam 'Mew ex promo' + code '151/165' → code-kolom gevuld, item_id NULL")
-    at.session_state["modus"] = "VERKOOP"
-    at.run()
     at.text_input(key="vrij_naam").set_value("Mew ex promo").run()
     at.text_input(key="vrij_code").set_value("151/165").run()
     at.number_input(key="vrij_bedrag").set_value(275.0).run()
@@ -337,31 +315,13 @@ def scenarios(AppTest, db):
     check(vrij["type"] == "verkoop", "scenario 2: staat als verkoop geboekt")
     uitkomst(toon(vrij))
 
-    # --- 3. percentage-rekenhulp ------------------------------------------
-    kop("3.", "Rekent de percentage-hulp goed, en kan ik het bedrag overschrijven?",
-        "comp €120 × 80% = €96; daarna handmatig €92 → €92 in de database")
-    at.session_state["modus"] = "INKOOP"
-    at.session_state["inkoop_modus"] = "Per kaart"
-    at.run()
-    at.text_input(key="zoekterm").set_value("charizard").run()
-    at.button(key=knoppen(at, "pick_")[0].key).click().run()
-    at.button(key="pct_80").click().run()
-    berekend = at.number_input(key="bedrag").value
-    check(berekend == 96.0, f"scenario 3: 80% van €120 = €96 (kreeg {berekend})")
-    at.number_input(key="bedrag").set_value(92.0).run()
-    at.button(key="vastleggen").click().run()
-    r = rijen(engine)
-    check(float(r[-1]["bedrag"]) == 92.0, "scenario 3: overschreven bedrag opgeslagen")
-    uitkomst(f"knop 80% vulde €{berekend:.2f} in, daarna handmatig €92,00",
-             toon(r[-1]))
-
-    # --- 4. dagtotaal + undo ----------------------------------------------
-    kop("4.", "Klopt het dagtotaal, en draait undo mijn eigen laatste invoer terug?",
-        "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn €92 "
+    # --- 3. dagtotaal + undo ----------------------------------------------
+    kop("3.", "Klopt het dagtotaal, en draait undo mijn eigen laatste invoer terug?",
+        "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn €275 "
         "en laat hun €50 staan")
     voor_collega = dagtotaal(at)
-    check(voor_collega == "Vandaag: €275 in · €277 uit · netto −€2",
-          f"scenario 4: eigen invoer telt direct mee ({voor_collega!r})")
+    check(voor_collega == "Vandaag: verkoop €275 · trades: 0",
+          f"scenario 3: eigen invoer telt direct mee ({voor_collega!r})")
 
     at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
     at2.run()
@@ -376,27 +336,26 @@ def scenarios(AppTest, db):
     # totaal weer helemaal bij.
     at.run()
     check(dagtotaal(at) == voor_collega,
-          f"scenario 4: invoer van een collega volgt binnen de cache-TTL "
+          f"scenario 3: invoer van een collega volgt binnen de cache-TTL "
           f"({dagtotaal(at)!r})")
     uitkomst(f"direct na eigen invoer  : {voor_collega}",
              f"vlak na invoer collega  : {dagtotaal(at)}  "
              f"(cache van 20 s — nog niet ververst)")
 
     at.button(key="undo").click().run()
-    check(any("92" in w.value for w in at.warning),
-          f"scenario 4: bevestiging noemt de eigen laatste invoer "
+    check(any("275" in w.value for w in at.warning),
+          f"scenario 3: bevestiging noemt de eigen laatste invoer "
           f"({[w.value for w in at.warning]})")
     at.button(key="undo_ja").click().run()
     r = rijen(engine)
     bedragen = [float(x["bedrag"]) for x in r]
-    check(bedragen == [185.0, 275.0, 50.0],
-          f"scenario 4: eigen €92 weg, €50 van de collega blijft ({bedragen})")
-    check(dagtotaal(at) == "Vandaag: €325 in · €185 uit · netto €140",
-          f"scenario 4: dagtotaal loopt terug ({dagtotaal(at)!r})")
+    check(bedragen == [50.0],
+          f"scenario 3: eigen €275 weg, €50 van de collega blijft ({bedragen})")
+    check(dagtotaal(at) == "Vandaag: verkoop €50 · trades: 0",
+          f"scenario 3: dagtotaal loopt terug ({dagtotaal(at)!r})")
     uitkomst(f"bevestiging             : {at.session_state['bevestiging']}",
              f"rijen na undo           : {bedragen}",
-             f"dagtotaal na undo       : {dagtotaal(at)}  "
-             f"(325 in = eigen 275 + collega 50; 185 uit = de stapel)")
+             f"dagtotaal na undo       : {dagtotaal(at)}")
     print()
 
 
@@ -425,8 +384,10 @@ def main():
           f"event aangemaakt: {ev}")
 
     # --- dagtotaal: leeg bij de start -------------------------------------
-    check(dagtotaal(at) == "Vandaag: €0 in · €0 uit · netto €0",
+    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 0",
           f"dagtotaal begint op nul ({dagtotaal(at)!r})")
+    check(not any(sc.key == "modus" for sc in at.segmented_control),
+          "met alleen VERKOOP is er geen moduskeuze te maken — balk blijft weg")
 
     # --- zoeken + kiezen --------------------------------------------------
     at.text_input(key="zoekterm").set_value("umbreon").run()
@@ -504,7 +465,7 @@ def main():
           "item geselecteerd")
     check(at.number_input(key="bedrag").value == 450.00,
           f"bedrag voorgevuld met comp_prijs (kreeg {at.number_input(key='bedrag').value})")
-    check(not knoppen(at, "pct_"), "verkoop-flow blijft kaal: geen rekenhulp")
+    check(not knoppen(at, "pct_"), "geen inkoop-rekenhulp meer in de app")
 
     # --- vastleggen (verkoop, overschreven bedrag) ------------------------
     at.number_input(key="bedrag").set_value(430.0).run()
@@ -530,53 +491,33 @@ def main():
     check(bev == "✓ Umbreon VMAX (Alternate Art) — €430.00", f"korte bevestiging: {bev}")
     check(any("tc-ok" in m.value and bev in m.value for m in at.markdown),
           "bevestiging staat als vervagend blok op het scherm")
-    check(dagtotaal(at) == "Vandaag: €430 in · €0 uit · netto €430",
+    check(dagtotaal(at) == "Vandaag: verkoop €430 · trades: 0",
           f"dagtotaal ververst na de verkoop ({dagtotaal(at)!r})")
+    check(rijen(engine)[0]["group_id"] is None,
+          "losse verkoop van één kaart krijgt geen group_id")
 
-    # --- tweede invoer direct erna (verkoop → inkoop) ---------------------
-    at.session_state["modus"] = "INKOOP"
-    at.run()
-    check(at.session_state["inkoop_modus"] == "Per kaart",
-          "inkoop opent op 'Per kaart'")
+    # --- tweede invoer direct erna ---------------------------------------
     at.text_input(key="zoekterm").set_value("charizard").run()
     at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(at.number_input(key="bedrag").value == 0.0, "bij inkoop geen voorgevuld bedrag")
-
-    # --- rekenhulp: comp × percentage, en altijd te overschrijven ---------
-    check([b.key for b in knoppen(at, "pct_")] == ["pct_70", "pct_75", "pct_80"],
-          f"drie percentage-snelknoppen ({[b.key for b in knoppen(at, 'pct_')]})")
-    check(any("comp €120" in m.value for m in at.markdown), "comp-prijs staat erbij")
-    at.button(key="pct_75").click().run()
-    check(at.number_input(key="bedrag").value == 90.0,
-          f"75% van comp €120 = €90 (kreeg {at.number_input(key='bedrag').value})")
-    at.number_input(key="eigen_pct").set_value(65).run()
-    check(at.number_input(key="bedrag").value == 78.0,
-          f"eigen percentage 65% = €78 (kreeg {at.number_input(key='bedrag').value})")
+    check(at.number_input(key="bedrag").value == 120.0,
+          f"tweede kaart vult ook voor (kreeg {at.number_input(key='bedrag').value})")
     at.number_input(key="bedrag").set_value(60.0).run()
-    check(at.number_input(key="bedrag").value == 60.0,
-          "berekend bedrag blijft met de hand te overschrijven")
     at.button(key="vastleggen").click().run()
     r = rijen(engine)
     check(len(r) == 2, f"tweede invoer direct erna werkt (kreeg {len(r)} rijen)")
     if len(r) == 2:
-        check(r[1]["type"] == "inkoop" and float(r[1]["bedrag"]) == 60.0,
-              "tweede invoer is inkoop van €60")
-    check(dagtotaal(at) == "Vandaag: €430 in · €60 uit · netto €370",
-          f"dagtotaal telt verkoop en inkoop apart ({dagtotaal(at)!r})")
+        check(r[1]["type"] == "verkoop" and float(r[1]["bedrag"]) == 60.0,
+              "tweede invoer is verkoop van €60")
+    check(dagtotaal(at) == "Vandaag: verkoop €490 · trades: 0",
+          f"dagtotaal telt de tweede verkoop mee ({dagtotaal(at)!r})")
 
-    # --- rekenhulp: afronding op hele euro's + kaart zonder comp ----------
-    at.text_input(key="zoekterm").set_value("pikachu").run()
-    at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    at.button(key="pct_70").click().run()
-    check(at.number_input(key="bedrag").value == 9.0,
-          f"70% van €12,50 = €8,75 → afgerond €9 (kreeg {at.number_input(key='bedrag').value})")
-    at.button(key="deselect").click().run()
+    # --- kaart zonder prijs: gewoon zelf intikken ------------------------
     at.text_input(key="zoekterm").set_value("bulbasaur").run()
     at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
-    check(not knoppen(at, "pct_"), "kaart zonder comp-prijs: geen rekenhulp")
-    check(bool(at.number_input(key="bedrag")), "zonder comp gewoon zelf een bedrag intikken")
+    check(at.number_input(key="bedrag").value == 0.0,
+          "kaart zonder prijs begint op nul")
     at.button(key="deselect").click().run()
-    check(len(rijen(engine)) == 2, "rekenen schrijft niets weg")
+    check(len(rijen(engine)) == 2, "rondkijken schrijft niets weg")
 
     # --- vangnet: vrij invoeren, mét losse code --------------------------
     at.text_input(key="vrij_naam").set_value("Japanse Eevee Heroes booster box").run()
@@ -592,11 +533,12 @@ def main():
         check(v["ruwe_tekst"] == "Japanse Eevee Heroes booster box", "ruwe_tekst = ingetypte naam")
         check(v["code"] == "s6a", f"losse code in de code-kolom ({v['code']!r})")
         check(v["afzender"] == "TC", "vrije invoer heeft afzender 'TC'")
+        check(v["type"] == "verkoop", "vrije invoer is altijd een verkoop")
     check(at.text_input(key="vrij_code").value == "", "code-veld leeg na vastleggen")
+    check(not any(sc.key == "vrij_modus" for sc in at.segmented_control),
+          "geen inkoop/verkoop-keuze meer bij vrij invoeren")
 
     # --- bedrag 0 wordt geweigerd ----------------------------------------
-    at.session_state["modus"] = "VERKOOP"
-    at.run()
     at.text_input(key="zoekterm").set_value("pikachu").run()
     at.button(key=[b.key for b in at.button if b.key.startswith("pick_")][0]).click().run()
     at.number_input(key="bedrag").set_value(0.0).run()
@@ -610,8 +552,8 @@ def main():
     check(len(log) == 1, "compacte lijst met laatste invoeren wordt getoond")
     if log:
         check(log[0].count("<br>") == 2, f"3 regels in de lijst ({log[0].count('<br>') + 1})")
-        check("−€60" in log[0] and "+€430" in log[0],
-              f"inkoop met − en verkoop met + ({log[0][:120]})")
+        check("+€430" in log[0] and "+€60" in log[0],
+              f"verkopen met + ({log[0][:120]})")
     check(not at.dataframe, "geen tabel meer op het invoerscherm")
 
     # --- twee sessies tegelijk -------------------------------------------
@@ -628,94 +570,40 @@ def main():
         check(r[3]["afzender"] == "TC" and float(r[3]["bedrag"]) == 40.0,
               "tweede sessie schrijft naar dezelfde database")
 
-    # --- inkoop op totaal: stapeltje kaarten, één bedrag -------------------
-    at.session_state["modus"] = "INKOOP"
-    at.session_state["inkoop_modus"] = "Totaal"
-    at.run()
-    check("(0)" in at.button(key="stapel_vastleggen").label,
-          f"lege stapel: teller op nul ({at.button(key='stapel_vastleggen').label})")
-    at.text_input(key="stapel_zoek").set_value("umbreon vmax").run()
-    at.button(key=knoppen(at, "add_")[0].key).click().run()
-    check(len(at.session_state["stapel"]) == 1, "kaart uit de database toegevoegd")
-    check(at.text_input(key="stapel_zoek").value == "",
-          "zoekveld leeg na toevoegen — meteen door naar de volgende")
-    at.text_input(key="stapel_zoek").set_value("charizard").run()
-    at.button(key=knoppen(at, "add_")[0].key).click().run()
-    at.text_input(key="stapel_vrij").set_value("Stapeltje commons").run()
-    at.text_input(key="stapel_code").set_value("bulk").run()
-    at.button(key="stapel_vrij_knop").click().run()
-    check([k["naam"] for k in at.session_state["stapel"]] ==
-          ["Umbreon VMAX (Alternate Art)", "Charizard ex (Special Illustration)",
-           "Stapeltje commons"],
-          f"drie kaarten in de stapel ({at.session_state['stapel']})")
-    check([k["code"] for k in at.session_state["stapel"]] ==
-          ["EVS 215", "OBF 223", "bulk"],
-          f"codes meegenomen in de stapel ({[k['code'] for k in at.session_state['stapel']]})")
-    check(any('class="tc-teller"' in m.value and ">3</b> kaarten" in m.value
-              for m in at.markdown),
-          "teller boven de lijst telt mee")
-
-    at.button(key="weg_1").click().run()
-    check([k["naam"] for k in at.session_state["stapel"]] ==
-          ["Umbreon VMAX (Alternate Art)", "Stapeltje commons"],
-          "verkeerde kaart is los te verwijderen")
-
-    at.number_input(key="totaal_bedrag").set_value(0.0).run()
-    at.button(key="stapel_vastleggen").click().run()
-    check(len(rijen(engine)) == 4, "stapel zonder totaalbedrag wordt niet weggeschreven")
-    check(len(at.session_state["stapel"]) == 2, "stapel blijft staan na weigering")
-
-    at.number_input(key="totaal_bedrag").set_value(150.0).run()
-    at.button(key="stapel_vastleggen").click().run()
-    r = rijen(engine)
-    check(len(r) == 5, f"stapel = één transactie (kreeg {len(r)} rijen)")
-    if len(r) == 5:
-        s = r[4]
-        check(s["type"] == "inkoop" and float(s["bedrag"]) == 150.0,
-              "één inkoop van €150 voor de hele stapel")
-        check(s["item_id"] is None, "stapel hangt aan geen enkel los item")
-        check(s["flag"] == "stapel", "flag = 'stapel'")
-        check(s["ruwe_tekst"] == "Stapel 2 kaarten: Umbreon VMAX (Alternate Art) "
-                                 "[EVS 215] · Stapeltje commons [bulk]",
-              f"namen én codes bewaard in ruwe_tekst ({s['ruwe_tekst']})")
-        check(s["code"] is None, "stapel zelf heeft geen losse code")
-    check(at.session_state["stapel"] == [], "stapel leeg na vastleggen")
-    check(dagtotaal(at) == "Vandaag: €470 in · €485 uit · netto −€15",
-          f"dagtotaal telt de stapel mee ({dagtotaal(at)!r})")
-
     # --- undo: alleen de eigen laatste invoer -----------------------------
     at2.text_input(key="zoekterm").set_value("blastoise").run()
     at2.button(key=knoppen(at2, "pick_")[0].key).click().run()
     at2.number_input(key="bedrag").set_value(25.0).run()
     at2.button(key="vastleggen").click().run()
-    check(len(rijen(engine)) == 6, "collega boekt er nog een verkoop tussendoor")
+    check(len(rijen(engine)) == 5, "collega boekt er nog een verkoop tussendoor")
 
     at.run()
     check(bool(at.button(key="undo")), "undo-knop staat er na een eigen invoer")
     at.button(key="undo").click().run()
-    check(any("Laatste invoer verwijderen" in w.value and "150" in w.value
+    check(any("Laatste invoer verwijderen" in w.value and "275" in w.value
               for w in at.warning),
           f"eerst bevestiging vragen ({[w.value for w in at.warning]})")
-    check(len(rijen(engine)) == 6, "vragen alleen — nog niets verwijderd")
+    check(len(rijen(engine)) == 5, "vragen alleen — nog niets verwijderd")
 
     at.button(key="undo_nee").click().run()
-    check(len(rijen(engine)) == 6, "'nee' laat de invoer staan")
+    check(len(rijen(engine)) == 5, "'nee' laat de invoer staan")
     check(not at.warning, "bevestiging weg na 'nee'")
 
     at.button(key="undo").click().run()
     at.button(key="undo_ja").click().run()
     r = rijen(engine)
-    check(len(r) == 5, f"undo verwijdert precies één rij (kreeg {len(r)} rijen)")
-    check([float(x["bedrag"]) for x in r] == [430.0, 60.0, 275.0, 40.0, 25.0],
-          f"eigen stapel weg, invoer van de collega blijft ({[float(x['bedrag']) for x in r]})")
-    check(dagtotaal(at) == "Vandaag: €495 in · €335 uit · netto €160",
+    check(len(r) == 4, f"undo verwijdert precies één rij (kreeg {len(r)} rijen)")
+    check([float(x["bedrag"]) for x in r] == [430.0, 60.0, 40.0, 25.0],
+          f"eigen vrije invoer weg, die van de collega blijft "
+          f"({[float(x['bedrag']) for x in r]})")
+    check(dagtotaal(at) == "Vandaag: verkoop €555 · trades: 0",
           f"dagtotaal loopt terug na undo ({dagtotaal(at)!r})")
 
     at.button(key="undo").click().run()
     at.button(key="undo_ja").click().run()
     r = rijen(engine)
-    check([float(x["bedrag"]) for x in r] == [430.0, 60.0, 40.0, 25.0],
-          f"tweede undo pakt de eigen vorige invoer (€275), niet die van de collega "
+    check([float(x["bedrag"]) for x in r] == [430.0, 40.0, 25.0],
+          f"tweede undo pakt de eigen vorige invoer (€60), niet die van de collega "
           f"({[float(x['bedrag']) for x in r]})")
 
     nieuwe_features(AppTest, db)
