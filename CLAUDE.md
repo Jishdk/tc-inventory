@@ -241,6 +241,28 @@ Kleinere valkuilen, allemaal een keer misgegaan:
   code. Een item *zonder* code is geen bevestiging — bij veertien Pikachu's pikt dat er
   willekeurig een uit.
 
+### Notities bij de bewust-dubbele items (19-08-2026)
+
+Elf naam+code-combinaties staan bewust twee keer in v7. Bij zeven zie je meteen waarom
+(taal EN naast JP, of NM naast EX); bij vier niet, en dat zijn precies de rijen waar
+iemand later gaat twijfelen of het een dubbeling is. Die hebben nu een notitie in
+kolom S:
+
+- **Shining Magikarp 66/64** — dit zijn **twee verschillende kaarten** en ze mogen nooit
+  samengevoegd worden: rij 71 (€42) is de Celebrations-reprint, rij 754 (€350) de
+  vintage raw uit Neo Revelation. Let op dat er óók een derde is: rij 565, een Slab
+  PSA 5 van €351 zonder code. Die prijs lijkt verdacht veel op die van rij 754 —
+  verwar ze niet.
+- **Pika van Gogh** (rij 539/540) en **Umbreon slabs** (rij 566/576) — hier stond het
+  antwoord al in de **Grading**-kolom: PSA 9 tegen PSA 10, en EN PSA 8 tegen JP PSA 9.
+  Die kolom wordt makkelijk over het hoofd gezien, dus staat het nu ook in de notitie.
+- **Venusaur 15/102** (rij 68/274) — NM tegen GD, nog te bevestigen.
+
+Notities gaan als `inlineStr` de cel in. Dat scheelt gerommel met `sharedStrings.xml`
+en de tellers `count`/`uniqueCount` daarin; Excel en openpyxl lezen het allebei gewoon.
+Het script weigert te schrijven als er al een notitie in de cel staat — overschrijven
+zou hier stil informatie weggooien.
+
 ### Twee telfouten in het Dashboard hersteld (19-08-2026)
 
 Het Dashboard telde twee dingen mee die er niet in horen. Beide zaten er al maanden in
