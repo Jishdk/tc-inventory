@@ -241,6 +241,28 @@ Kleinere valkuilen, allemaal een keer misgegaan:
   code. Een item *zonder* code is geen bevestiging — bij veertien Pikachu's pikt dat er
   willekeurig een uit.
 
+### Twee telfouten in het Dashboard hersteld (19-08-2026)
+
+Het Dashboard telde twee dingen mee die er niet in horen. Beide zaten er al maanden in
+en hadden niets met de opschoning te maken — ze kwamen pas boven water toen de
+categorie-tabel 1524 stuks toonde tegen 1407 in de database.
+
+- **`Per categorie` telde over kolom Categorie**, dus zonder te kijken of er een kaart
+  in de rij stond: `SUMIF(Inventaris!E:E;"single";Inventaris!J:J)`. De lege
+  sjabloonrijen onder de inventaris hebben `Categorie = single`, `Taal = EN`,
+  `Staat = NM` en **`Aantal = 1`** voorgevuld en telden dus mee als spookstuks — 117
+  ervan. Nu `SUMIFS(...;Inventaris!A:A;"?*")`, met dezelfde naam-voorwaarde die
+  `Aantal producten (stuks)` altijd al gebruikte. Telt op tot 1407.
+- **De `Aantal = 1` is uit de sjabloonrijen weggehaald** (Aantal, Vorig aantal, Verkocht
+  en Status geleegd op 223 naamloze rijen). Dat haalt de spooktelling bij de bron weg en
+  voorkomt dat een nieuw ingetikte kaart ongemerkt op 1 blijft staan. Categorie, Taal en
+  Staat blijven staan als voorzet, en de formules in die rijen ook.
+
+Let op het verschil tussen de twee formulevormen — dat is de les hier: `SUMIF` op
+Categorie ziet elke rij, `SUMIF`/`SUMIFS` met `A:A;"?*"` alleen rijen met een naam. De
+waardekolommen O en P hadden er nooit last van, omdat hun eigen formule al met
+`IF($A="";"";…)` begint.
+
 ### Terugschrijven, uitgevoerd op 18-08-2026
 
 De afboeking van Cardmaniacs staat nu in `data/TC_Inventaris_v7.xlsx`: 763 kaarten,
