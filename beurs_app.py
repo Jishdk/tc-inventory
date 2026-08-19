@@ -27,6 +27,7 @@ Ontwerpkeuzes:
 from __future__ import annotations
 
 import html
+import math
 import os
 import sys
 import uuid
@@ -77,6 +78,7 @@ SNELKNOPPEN = [
     {"knop": "Black Bolt", "zoek": "black bolt"},
 ]
 SNELKNOPPEN_PER_RIJ = 3   # drie naast elkaar past op 390 px; Streamlit wrapt niet zelf
+KORTING = 10              # percentage van de "comp −10%"-knop
 
 st.set_page_config(page_title="TC Beurs", page_icon="🃏", layout="centered")
 
@@ -197,6 +199,10 @@ BASIS_CSS = """
       text-align: right; padding: .6rem .75rem !important;}
   .st-key-mandje_totaal [data-testid="stNumberInputContainer"]::before {
       font-size: 1.6rem;}
+  /* presets: klein grut onder het mandje, mag niet met VASTLEGGEN concurreren */
+  [class*="st-key-preset_"] button, .st-key-onderhandeld button {
+      min-height: 2.5rem; padding: 0 .3rem; font-size: .88rem; font-weight: 600;}
+
   .st-key-prijs_modus div[data-testid="stSegmentedControl"] button,
   .st-key-prijs_modus div[data-testid="stButtonGroup"] button {
       min-height: 2.4rem; font-size: .92rem; font-weight: 500;}
@@ -273,10 +279,10 @@ RETURNING id
 INSERT_TX = text("""
 INSERT INTO transactions (
     event_id, item_id, datum, tijd, kanaal, type, bedrag, afzender, flag,
-    ruwe_tekst, code, stuks, group_id
+    ruwe_tekst, code, stuks, group_id, onderhandeld
 ) VALUES (
     :event_id, :item_id, :datum, :tijd, :kanaal, :type, :bedrag, :afzender,
-    :flag, :ruwe_tekst, :code, :stuks, :group_id
+    :flag, :ruwe_tekst, :code, :stuks, :group_id, :onderhandeld
 )
 RETURNING id
 """)
@@ -393,7 +399,7 @@ def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, dict]:
 
 
 def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
-                       code=None, stuks=1, group_id=None) -> int:
+                       code=None, stuks=1, group_id=None, onderhandeld=False) -> int:
     """Eén losse insert. Geen retry: een dubbel geboekte verkoop is erger dan
     een foutmelding waarna je zelf opnieuw tikt.
 
@@ -406,7 +412,11 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
     workaround waarbij het restant als regels van €0,01 werd geboekt.
 
     `group_id` bindt de regels van één afspraak aan elkaar. NULL bij een losse
-    verkoop van één kaart — dat is nog steeds het normale geval."""
+    verkoop van één kaart — dat is nog steeds het normale geval.
+
+    `onderhandeld` zegt dat de prijs afweek van de comp-prijs. Dat is geen fout en
+    geen dubbeling, maar het verklaart later waarom de omzet lager uitvalt dan de
+    inventariswaarde deed vermoeden."""
     nu = datetime.now()
     with engine().begin() as conn:
         return conn.execute(INSERT_TX, {
@@ -423,6 +433,7 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
             "code": (code or "").strip() or None,
             "stuks": int(stuks or 1),
             "group_id": group_id,
+            "onderhandeld": bool(onderhandeld),
         }).scalar()
 
 
@@ -614,6 +625,8 @@ def init_state():
     # app denkt dat er iets gekozen is. Met `default=` klopt het wel. Headless is
     # dit alleen te zien aan `proto.default` — daar staat een test op.
     st.session_state.setdefault("dubbel_vraag", None)  # wacht op "toch vastleggen"
+    # None = leiden uit de bedragen, True/False = met de hand overruled
+    st.session_state.setdefault("onderhandeld_keuze", None)
 
     # Widget-state opruimen kan alleen vóórdat de widgets van deze run bestaan;
     # daarom zetten de knoppen hieronder een vlag en gebeurt het werk hier.
@@ -639,6 +652,7 @@ def init_state():
         # Weghalen in plaats van terugzetten, zodat `default=` weer aan bod komt.
         # De richting hoort niet te blijven hangen: anders boekt de trade daarna
         # ongemerkt de verkeerde kant op.
+        st.session_state["onderhandeld_keuze"] = None
         st.session_state.pop("prijs_modus", None)
         st.session_state.pop("cash_richting", None)
         st.session_state["dubbel_vraag"] = None
@@ -678,6 +692,47 @@ def voeg_toe(*, item_id, naam, kenmerk="", conditie="", voorraad=0, prijs=None,
 
 def regel_stuks(rid: int) -> int:
     return max(1, int(st.session_state.get(f"stuks_{rid}", 1)))
+
+
+def zet_prijzen(deel: float | None):
+    """Alle regels op hun eigen comp-prijs, of op een deel daarvan.
+
+    Werkt over het hele mandje in plaats van per regel: dat kost één rij op het
+    scherm in plaats van één per kaart, en "alles op comp −10%" is precies wat er
+    bij het afdingen gebeurt. Regels zonder bekende prijs laten we met rust — daar
+    valt niets vanaf te halen.
+
+    `deel=None` betekent handmatig: leegmaken, dan tik je het zelf in."""
+    for regel in st.session_state["mandje"]:
+        if deel is None:
+            regel["bedrag"] = 0.0
+        elif regel["prijs"]:
+            # Hele euro's, half naar boven: op een beursvloer reken je met briefjes
+            # en munten, niet met centen.
+            regel["bedrag"] = float(math.floor(regel["prijs"] * deel + 0.5))
+        else:
+            continue
+        # Ook de widget-state bijwerken. Zolang het veld op het scherm staat wint
+        # zijn eigen state van de `value=` bij het opbouwen, dus een nieuw bedrag
+        # alleen in het mandje-record zetten zou niets zichtbaar doen. Dit draait
+        # als callback, dus vóór de widgets van de volgende run bestaan.
+        st.session_state[f"regelprijs_{regel['rid']}"] = regel["bedrag"]
+    st.session_state["dubbel_vraag"] = None
+
+
+def wijkt_af() -> bool:
+    """Staat er ergens een ander bedrag dan de comp-prijs? Dan is er onderhandeld.
+
+    Afgeleid in plaats van gevraagd: dit is exact te bepalen uit wat er op het
+    scherm staat, en een vlag die je moet onthouden aan te zetten is een vlag die
+    vergeten wordt. De knop eronder kan het alsnog overrulen."""
+    return any(regel["prijs"] and abs(float(regel["bedrag"]) - float(regel["prijs"])) > 0.005
+               for regel in st.session_state["mandje"])
+
+
+def is_onderhandeld() -> bool:
+    keuze = st.session_state.get("onderhandeld_keuze")
+    return wijkt_af() if keuze is None else bool(keuze)
 
 
 def stuks_bij(rid: int, stap: int):
@@ -979,6 +1034,37 @@ if not mandje:
                "hieronder als hij er niet in staat."
                + (" Dit zijn de kaarten die **wij** weggeven." if TRADE else ""))
 
+# --- prijs-presets en de onderhandeld-vlag ---------------------------------
+# Eén rij voor het hele mandje in plaats van een rij per kaart: dat scheelt op een
+# telefoon precies het verschil tussen VASTLEGGEN boven of onder de vouw. Bij één
+# kaart is het letterlijk "comp / comp −10% / handmatig" uit de opdracht.
+TE_COMPEN = not TRADE and not TOTAALPRIJS and any(r["prijs"] for r in mandje)
+
+if TE_COMPEN:
+    kol_comp, kol_min, kol_hand, kol_flag = st.columns(
+        [1, 1.2, 1.3, 1.6], vertical_alignment="center")
+    kol_comp.button("comp", key="preset_comp", width="stretch",
+                    on_click=zet_prijzen, args=(1.0,),
+                    help="alles terug op de comp-prijs")
+    kol_min.button(f"−{KORTING}%", key="preset_korting", width="stretch",
+                   on_click=zet_prijzen, args=(1 - KORTING / 100,),
+                   help=f"alles op comp min {KORTING}%, afgerond op hele euro's")
+    kol_hand.button("handmatig", key="preset_hand", width="stretch",
+                    on_click=zet_prijzen, args=(None,),
+                    help="bedragen leegmaken en zelf intikken")
+    with kol_flag:
+        # Staat standaard goed: hij is aan zodra een bedrag van de comp afwijkt.
+        # De tik is er voor het geval dat níét klopt — een prijs die toevallig op
+        # comp uitkomt maar wel bevochten is, of andersom.
+        aan = is_onderhandeld()
+        if st.button("✓ onderhandeld" if aan else "onderhandeld",
+                     key="onderhandeld", width="stretch",
+                     type="primary" if aan else "secondary",
+                     help="wijkt de prijs af van comp? staat vanzelf goed, "
+                          "maar is hier te overrulen"):
+            st.session_state["onderhandeld_keuze"] = not aan
+            st.rerun()
+
 # --- prijs (verkoop) of cash + binnenkomst (trade) -------------------------
 if TRADE:
     # Twee knoppen in plaats van een plus/min: op een beursvloer wil je in één
@@ -1084,6 +1170,7 @@ if (klik or bevestigd) and mandje:
                     item_id=regel["id"], bedrag=bedrag, tx_type=TX_TYPE,
                     ruwe_tekst=regel["naam"], code=regel.get("code"),
                     stuks=regel_stuks(regel["rid"]), group_id=groep,
+                    onderhandeld=(not TRADE and is_onderhandeld()),
                     flag=("vrij ingevoerd" if regel["id"] is None else
                           "mandje-totaal" if TOTAALPRIJS else
                           "mandje" if groep and not TRADE else None)))

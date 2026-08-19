@@ -150,6 +150,16 @@ def echt_gekozen(at, key: str) -> bool:
     return bool(list(at.segmented_control(key=key).proto.default))
 
 
+# Selectors die hun hele familie mogen raken, met woorden in plaats van cijfers
+# achter de prefix. Alles wat hier niet staat en toch overlapt is een ongeluk —
+# zoals [class*="st-key-prijs_"] dat prijs_modus meepakte en onzichtbaar maakte.
+BEWUSTE_OVERLAP = {
+    ("preset_", "preset_comp"),
+    ("preset_", "preset_korting"),
+    ("preset_", "preset_hand"),
+}
+
+
 def css_botsingen(at) -> set:
     """Selectors die per ongeluk een ándere widget te pakken hebben.
 
@@ -162,15 +172,17 @@ def css_botsingen(at) -> set:
     niet te zien in een headless test die geen CSS uitvoert. Vandaar deze check
     op de selectors zelf.
 
-    Een rest die alleen uit cijfers bestaat is de bedoeling (`pick_` + `3`);
-    alles daarbuiten is een botsing."""
+    Een rest die alleen uit cijfers bestaat is de bedoeling (`pick_` + `3`): dat
+    zijn de families met één element per kaart. Een familie die op woorden eindigt
+    moet hieronder expliciet staan — dan is het een keuze en geen ongeluk."""
     stijl = "\n".join(m.value for m in at.markdown if "<style>" in m.value)
     selectors = set(re.findall(r'\[class\*="st-key-([^"]+)"\]', stijl))
     elementen = (list(at.button) + list(at.number_input) + list(at.text_input)
                  + list(at.segmented_control))
     keys = {el.key for el in elementen if el.key}
     return {(s, k) for s in selectors for k in keys
-            if k.startswith(s) and k != s and not k[len(s):].isdigit()}
+            if k.startswith(s) and k != s and not k[len(s):].isdigit()
+            and (s, k) not in BEWUSTE_OVERLAP}
 
 
 def maak_engine():
@@ -202,7 +214,7 @@ def rijen(engine):
     with engine.connect() as c:
         return c.execute(text(
             "SELECT id, event_id, item_id, datum, tijd, kanaal, type, bedrag, "
-            "afzender, flag, ruwe_tekst, code, stuks, group_id "
+            "afzender, flag, ruwe_tekst, code, stuks, group_id, onderhandeld "
             "FROM transactions ORDER BY id")).mappings().all()
 
 
@@ -713,6 +725,117 @@ def snelknoppen_tests(AppTest, db):
     print()
 
 
+def presets_tests(AppTest, db):
+    """Prijs-presets en de onderhandeld-vlag: comp / comp −10% / handmatig, en de
+    vlag die vanzelf goed staat."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("PRESETS — comp, comp −10%, handmatig, en de onderhandeld-vlag")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    # --- auto-vullen: overal waar een kaart binnenkomt --------------------
+    kop("A.", "Staat de prijs overal meteen goed?",
+        "zoekresultaat, snelknop en cm-terugval vullen alle drie voor; "
+        "vrij invoeren kent geen prijs en begint op nul")
+    kies(at, "umbreon vmax")
+    check(prijsvelden(at)[0].value == 450.0, "via het zoekresultaat: comp €450")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+
+    at.button(key=[b for b in snelknoppen(at) if "Prismatic" in b.label][0].key).click().run()
+    check(prijsvelden(at)[0].value == 15.0, "via een snelknop: comp €15")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+
+    kies(at, "pika van gogh")
+    check(prijsvelden(at)[0].value == 852.0, "zonder comp valt hij terug op de cm-prijs")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+
+    at.text_input(key="vrij_naam").set_value("Onbekende promo").run()
+    at.button(key="vrij_knop").click().run()
+    check(prijsvelden(at)[0].value == 0.0, "vrij ingevoerd kent geen prijs: nul")
+    check(not any(b.key == "preset_comp" for b in at.button),
+          "en dan is er ook niets om vanaf te rekenen: geen presets")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    uitkomst("zoekresultaat €450 · snelknop €15 · cm-terugval €852 · vrij €0")
+
+    # --- presets -----------------------------------------------------------
+    kop("B.", "Zakken de presets zoals verwacht?",
+        "comp €450 → −10% = €405 → handmatig = €0 → comp = €450 terug")
+    kies(at, "umbreon vmax")
+    check(bool(at.button(key="preset_comp")), "de presetrij verschijnt bij een kaart met prijs")
+    at.button(key="preset_korting").click().run()
+    check(prijsvelden(at)[0].value == 405.0,
+          f"−10% van €450 = €405 ({prijsvelden(at)[0].value})")
+    at.button(key="preset_hand").click().run()
+    check(prijsvelden(at)[0].value == 0.0, "handmatig maakt het veld leeg")
+    at.button(key="preset_comp").click().run()
+    check(prijsvelden(at)[0].value == 450.0, "comp zet 'm terug")
+    uitkomst("€450 → −10% €405 → handmatig €0 → comp €450")
+
+    # afronding op hele euro's
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    at.button(key=[b for b in snelknoppen(at) if "Sleeved" in b.label][0].key).click().run()
+    at.button(key="preset_korting").click().run()
+    check(prijsvelden(at)[0].value == 13.0,
+          f"−10% van €14 = €12,60 → afgerond €13 ({prijsvelden(at)[0].value})")
+
+    # over het hele mandje tegelijk
+    kies(at, "charizard")
+    at.button(key="preset_korting").click().run()
+    check([p.value for p in prijsvelden(at)] == [13.0, 108.0],
+          f"één tik zakt het hele mandje ({[p.value for p in prijsvelden(at)]})")
+
+    # --- onderhandeld ------------------------------------------------------
+    kop("C.", "Staat de onderhandeld-vlag vanzelf goed?",
+        "afwijkend bedrag → vlag aan zonder tik; terug op comp → vlag uit; "
+        "en met de hand te overrulen")
+    check("✓ onderhandeld" in at.button(key="onderhandeld").label,
+          f"na −10% staat de vlag aan zonder dat er iets is aangetikt "
+          f"({at.button(key='onderhandeld').label})")
+    at.button(key="preset_comp").click().run()
+    check(at.button(key="onderhandeld").label == "onderhandeld",
+          f"terug op comp: vlag uit ({at.button(key='onderhandeld').label})")
+    at.button(key="onderhandeld").click().run()
+    check("✓" in at.button(key="onderhandeld").label,
+          "met de hand aan te zetten als de prijs toevallig op comp uitkomt")
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    check(len(r) == 2 and all(x["onderhandeld"] for x in r),
+          f"de overrule landt op alle regels van de afspraak "
+          f"({[bool(x['onderhandeld']) for x in r]})")
+    uitkomst(*[toon(x) + f"  onderhandeld={bool(x['onderhandeld'])}" for x in r])
+
+    # afgeleid, zonder tik
+    kies(at, "umbreon vmax")
+    zet_prijs(at, 0, 400.0)
+    at.button(key="vastleggen").click().run()
+    check(bool(rijen(engine)[-1]["onderhandeld"]),
+          "een bedrag onder comp zet de vlag zonder tik")
+
+    kies(at, "umbreon vmax")
+    at.button(key="vastleggen").click().run()
+    check(not rijen(engine)[-1]["onderhandeld"],
+          "precies de comp-prijs is niet onderhandeld")
+
+    # trade kent geen comp-prijs per kaart, dus ook geen vlag
+    at.segmented_control(key="modus").set_value("TRADE").run()
+    kies(at, "charizard")
+    check(not any(b.key == "preset_comp" for b in at.button),
+          "bij een trade zijn er geen presets — het geld hangt aan de afspraak")
+    at.button(key="vastleggen").click().run()
+    check(not any(x["onderhandeld"] for x in rijen(engine)[-2:]),
+          "en traderegels dragen de vlag niet")
+    print()
+
+
 def scenarios(AppTest, db):
     """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
     'verwacht → resultaat' per stap."""
@@ -1038,6 +1161,7 @@ def main():
     mandje_tests(AppTest, db)
     trade_tests(AppTest, db)
     snelknoppen_tests(AppTest, db)
+    presets_tests(AppTest, db)
     nieuwe_features(AppTest, db)
     kern_snel(AppTest, db)
     scenarios(AppTest, db)
