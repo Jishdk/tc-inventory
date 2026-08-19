@@ -25,6 +25,11 @@ Pipeline voor inventaris- en beursadministratie:
   vrije invoer van de beurs-app; bestaande rijen houden `NULL`.
 - `004_items_v6_kolommen.sql` (15-08-2026) voegt `vorig_aantal`, `verkocht`, `status` en
   `vintage_modern` toe aan `items`. Voorraad-/verkoopwaarde slaan we niet op: formules.
+- `007_transactions_groepen.sql` (19-08-2026) voegt `group_id` (text) en `onderhandeld`
+  (bool) toe aan `transactions`. `group_id` bindt de regels van één afspraak: de kaarten
+  van een mandje, of de kaarten én de cash-regel van een trade. NULL bij een losse
+  verkoop van één kaart. ⏳ **Nog niet toegepast op Supabase** — draai
+  `python src/migrate.py` vóór de nieuwe beurs-app live gaat, anders faalt elke insert.
 - **Let op bij vervangen van `items`:** `transactions.item_id`, `price_points.item_id` én
   `match_voorstellen.voorgesteld_item_id` zijn foreign keys. Die laatste stond op 65 rijen
   gevuld en blokkeert een DELETE; de importer zet 'm op NULL (voorstelregels blijven).
@@ -42,52 +47,110 @@ Pipeline voor inventaris- en beursadministratie:
 ## Beurs-app (snelle invoer op de telefoon)
 
 `beurs_app.py` — losstaande Streamlit-app waarmee het team tijdens een beurs live
-verkopen/inkopen vastlegt. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
+vastlegt wat er de deur uit gaat. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
 (`EVENT_NAAM` bovenin; beide dagen hangen aan dit ene event, `datum` = dag van invoer).
+
+De werkende versie van vóór de herbouw staat als `beurs_app_stable.py` naast het
+bestand — terugvalpad, niet meeontwikkelen.
 
 - `streamlit run beurs_app.py` (poort 8501/8502). Rookproef zonder DB:
   `python tests/test_beurs_app.py` — draait de app headless via `streamlit.testing`
-  tegen een SQLite-schaduwschema (86 checks).
+  tegen een SQLite-schaduwschema (184 checks). Daarnaast bewaakt
+  `python tests/test_afboeken_trades.py` welke regels `afboeken_sales.py` oppakt.
 - Eén gedeelde gebruiker: `afzender` staat vast op `"TC"` (constante `AFZENDER`).
-  Geen naamkeuze — bewust weggehaald, scheelt een scherm per invoer.
-- UI is mobiel-first en leunt op Streamlit's `st-key-<key>`-classes voor CSS
-  (zoekresultaten `pick_<id>`/`add_<id>`, `bedrag`, `vastleggen`). De tweede regel in
-  een resultaatknop komt van `\n` + `white-space: pre-line`; het grijze deel is
-  `:gray[…]`. Streamlit stapelt kolommen onder telefoonbreedte — daarom staat er een
-  `flex-wrap: nowrap` op `stHorizontalBlock` (anders valt de rekenhulp uit elkaar).
 - Schrijft **alleen** naar `transactions`; nooit afboeken op `items` (bewuste scope-grens).
-- Vangnet "vrij invoeren": `item_id=NULL`, `flag='vrij ingevoerd'`, `ruwe_tekst` = getypte
-  naam, plus een **los code-veld** (`173/195`, `swsh260`) dat in `transactions.code` landt.
-  Zonder item_id is die code het enige haakje om de regel later alsnog te koppelen; leeg
-  laten mag. Bij een gezochte kaart vullen we `code` met de set-code van het item.
-- **Prijs in de app** = `comp_prijs`, en waar die leeg is `prijs_cm`, met " cm" achter het
-  bedrag. Nodig sinds de v6-inventaris: alle 64 slabs en een deel van sealed/singles
-  hebben alléén een cm-prijs (120 items) en toonden anders "€ ?" bij juist de dure
-  voorraad. Voorinvullen bij verkoop en de %-rekenhulp gebruiken dezelfde werkprijs.
-- **Dagtotaal** bovenaan: som per `type` over `datum = vandaag` binnen het event
-  ("€X in · €Y uit · netto €Z"). Ververst na elke eigen invoer (`tx_versie` breekt de
-  cache open); invoer van een collega komt binnen de TTL van 20 s mee.
-- **Inkoop** kent twee manieren (`inkoop_modus`), verkoop blijft ongewijzigd snel:
-  - *Per kaart* — als de kaart een `comp_prijs` heeft: snelknoppen 70/75/80 % plus een
-    vrij %-veld. Bedrag = comp × % afgerond op hele euro's (half naar boven), daarna
-    gewoon te overschrijven. Geen comp → geen rekenhulp, zelf intikken.
-  - *Totaal* — kaarten (uit de database of vrij getypt, met optionele code) op een
-    stapeltje: teller "Stapel: N kaarten", elke regel is zelf de verwijderknop, en één
-    totaalbedrag onderaan. Dat wordt **één** transactie: `item_id=NULL`, `flag='stapel'`,
-    `ruwe_tekst = "Stapel N kaarten: naam [code] · naam · …"`. Losse prijzen bewaren
-    we niet — het totaal is leidend.
-- **Undo**: verwijdert na bevestiging de laatste transactie die *deze sessie* zelf heeft
-  weggeschreven (`mijn_invoeren` houdt de eigen insert-id's bij). Nooit die van een
-  collega, ook niet als die van hen recenter is.
-- **Kleur per modus**: VASTLEGGEN en de actieve toggle zijn groen bij verkoop en TC-rood
-  bij inkoop (`MODUS_KLEUR`). De modus staat al in `session_state` vóór het script draait,
-  dus die CSS zit in hetzelfde `<style>`-blok als `BASIS_CSS` — één element, geen extra
-  witruimte. Een uitgeschakelde knop blijft grijs (`:not(:disabled)`).
+- Twee modi: **VERKOOP** (groen) en **TRADE** (blauw). `MODUS_KLEUR` bepaalt de kleur van
+  VASTLEGGEN en de actieve toggle. Rood is bewust níét gebruikt voor een modus: dat
+  betekent in deze app "let op" (uitverkocht, foutmelding).
+- **INKOOP is eruit** (19-08-2026). Wat er binnenkomt gaat via de inventaris in de Excel,
+  niet via de beursvloer. Weg zijn: de inkoopmodus, de rekenhulp (70/75/80 % van de
+  comp-prijs), de stapel-op-totaalbedrag en de soort-keuze bij vrij invoeren. Bestaande
+  inkooprijen staan er gewoon nog en tellen mee in het dagtotaal.
+- Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
 - Thema staat in `.streamlit/config.toml` (light vastgezet, TC-rood als `primaryColor`).
   Streamlit leest dat uit de werkmap van de app — op Streamlit Cloud is dat de repo-root.
 - Schrijven kent géén automatische retry (dubbele boeking is erger dan een foutmelding);
   bij een fout blijft de invoer op het scherm staan. Lezen retryt één keer.
-- Optionele pincode via secret/env `TC_BEURS_PIN` — zetten zodra de app publiek staat.
+
+### Het mandje
+
+Alles gaat via één mandje, gedeeld door verkoop en trade. Een tik op een zoekresultaat
+zet de kaart er meteen in mét zijn prijs, dus de losse verkoop blijft drie handelingen:
+zoeken → tikken → VASTLEGGEN. Daar staat een test op (`kern_snel`).
+
+- Per regel: naam, een kleine `−/n/+`-stepper en een prijsveld op één regel, plus een
+  ✕ om 'm eruit te halen. Compact genoeg om VASTLEGGEN op een telefoon boven de vouw
+  te houden.
+- Vanaf twee kaarten verschijnt de keuze **Per kaart** / **Totaalprijs**:
+  - *Per kaart* — elke regel zijn eigen prijs (voorgevuld met de werkprijs).
+  - *Totaalprijs* — één afgesproken bedrag voor de hele stapel, naar rato van de
+    comp-prijs over de regels verdeeld met het afrondingsrestant op de zwaarste regel.
+    De som is daardoor tot op de cent het afgesproken bedrag, dus de omzet klopt zonder
+    aparte totaalregel en elke kaart houdt een eigen bedrag om op af te boeken.
+- Vastleggen schrijft **per kaart een eigen regel** met `item_id` + `stuks` en een
+  gedeelde `group_id`. Bij één losse kaart blijft `group_id` NULL — dat is nog steeds
+  het normale geval. Flags: `mandje`, `mandje-totaal`, `vrij ingevoerd` (per regel).
+- Vrij invoeren schuift aan in hetzelfde mandje (naam + optionele code, `item_id=NULL`,
+  flag `vrij ingevoerd`). Zonder item_id is die code het enige haakje om de regel later
+  alsnog te koppelen.
+
+### Trades
+
+- Het mandje bevat de kaarten die **wij** weggeven; die krijgen `bedrag = 0`, wél
+  `item_id` + `stuks`, zodat ze gewoon afboeken.
+- Cash staat in twee knoppen — **WIJ ONTVANGEN €** / **WIJ LEGGEN BIJ €** — en niet in
+  een plus/min: op een beursvloer wil je de richting zien, niet een teken voor een getal.
+  Bijleggen gaat negatief de database in, zodat een som over de dag het netto
+  cash-verschil is.
+- Wat er binnenkomt is één regel tekst ("5 kaarten, zie WA-foto"). Geen foto-upload: de
+  foto staat in WhatsApp en de tijdstempel koppelt.
+- Eén cash-regel per trade met flag `trade_cash`, **ook bij €0** — die regel is het anker
+  van de afspraak. Zonder zou een gelijke ruil alleen als uitgaande kaarten bestaan.
+- Trades tellen niet mee als verkoopomzet (type `trade`), en het dagtotaal telt ze als
+  **aantal afspraken**, niet in euro's.
+- `afboeken_sales.py` pakt traderegels op, maar **alleen die met een `group_id`** — dus
+  die uit deze app. Oudere trades uit de WhatsApp-import hebben er geen en blijven met
+  rust: daar staat niet vast welke kaart precies is weggegeven.
+
+### Dagtotaal, undo en de dubbel-check
+
+- **Dagtotaal** bovenaan: `Vandaag: verkoop €X · trades: N (cash +€Y)`, met daarachter
+  `· inkoop €Z` als er die dag oude inkoop staat. Ververst na elke eigen invoer
+  (`tx_versie` breekt de cache open); invoer van een collega komt binnen de TTL van 20 s mee.
+- **Undo** verwijdert de laatste afspraak die *deze sessie* zelf heeft weggeschreven, in
+  zijn geheel — alle regels van de groep of geen. Nooit die van een collega. Regels die
+  al een `afgeboekt_op` dragen blijven staan met een melding: daar hangt een
+  voorraadmutatie aan die de app niet terug kan draaien.
+- **Dubbel-check**: waarschuwt (blokkeert niet) als dezelfde kaart voor hetzelfde bedrag
+  binnen 120 s al is geboekt. Alleen bij één verkochte kaart — daar zit de dubbele tik.
+  Een mandje of een trade typ je niet per ongeluk twee keer.
+- **Prijs in de app** = `comp_prijs`, en waar die leeg is `prijs_cm`, met " cm" achter het
+  bedrag. Nodig sinds de v6-inventaris: alle slabs en een deel van sealed/singles hebben
+  alléén een cm-prijs en toonden anders "€ ?" bij juist de dure voorraad.
+- **Voorraad-indicator**: bij het zoekresultaat en in het mandje. Uitverkocht of meer
+  dan er ligt geeft een melding, maar blokkeert nooit — de stand loopt achter zodra er
+  buiten de app om iets is verkocht.
+
+### Drie valkuilen die headless niet te zien zijn
+
+Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de screenshots.
+
+- **`st-key-`-classes matchen op prefix.** De app stylet met `[class*="st-key-…"]`, en
+  `[class*="st-key-prijs_"]` pakte daardoor óók `prijs_modus` — inclusief een
+  `display:none` die de hele prijskeuze onzichtbaar maakte. De per-regel key heet nu
+  `regelprijs_`. `css_botsingen()` in de tests houdt elke selector tegen alle keys: raakt
+  een selector een key waarvan de rest niet uit cijfers bestaat, dan is het een botsing.
+- **Een `segmented_control` die pas later verschijnt** (`prijs_modus` bij de tweede kaart,
+  `cash_richting` in TRADE) krijgt géén selectie mee als de waarde alleen via
+  `session_state` is gezet: de knoppen staan leeg terwijl `.value` het juiste antwoord
+  geeft. Gebruik `default=`. Headless alleen zichtbaar aan `proto.default`, en daar staat
+  `echt_gekozen()` op.
+- **Widget-state verdwijnt** zodra een widget één run niet gerenderd wordt. De prijs van
+  een mandje-regel staat daarom in het mandje-record zelf en gaat als `value=` het veld
+  in — een tik op een zoekresultaat lokt meteen een rerun uit, waardoor de regels
+  eronder die run niet aan bod komen.
+- Kleinigheid: de testid van een segmented control is `stButtonGroup` in Streamlit 1.60,
+  niet `stSegmentedControl`. Beide staan in de CSS zodat een upgrade goed gaat.
 
 ## Aansluiting met het Dashboard-tabblad (v6)
 
@@ -201,7 +264,8 @@ zoek uit welke en vraag het na vóór je iets in `HERNOEMD` zet. Daarna zonder `
 - vrije invoer koppelen waar het eenduidig is, de rest markeren.
 
 **4. Afboeken.** `python src/afboeken_sales.py --event N --dry-run`, kijken of het klopt,
-dan `--uitvoeren`. Moest je stap 1 opnieuw doen, reset dan eerst `afgeboekt_op`:
+dan `--uitvoeren`. Sinds 19-08 pakt het script naast verkopen ook de traderegels van de
+app op (type `trade` mét `group_id`); die staan apart in de dry-run vermeld. Moest je stap 1 opnieuw doen, reset dan eerst `afgeboekt_op`:
 `UPDATE transactions SET afgeboekt_op = NULL WHERE event_id = N;` — de import heeft de
 voorraad immers teruggezet.
 
