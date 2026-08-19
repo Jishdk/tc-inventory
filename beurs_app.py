@@ -245,6 +245,10 @@ BASIS_CSS = """
   .tc-log b {font-weight: 600;}
   .st-key-undo button, .st-key-undo_ja button, .st-key-undo_nee button {
       min-height: 2.6rem; font-size: .9rem;}
+
+  /* nog een: duidelijk aanwezig, maar niet in de weg van VASTLEGGEN */
+  .st-key-nogmaals_knop button {min-height: 2.9rem; font-size: 1rem;
+      font-weight: 600; margin-top: -.3rem;}
 """
 
 # ------------------------------------------------------------------ database
@@ -627,6 +631,10 @@ def init_state():
     st.session_state.setdefault("dubbel_vraag", None)  # wacht op "toch vastleggen"
     # None = leiden uit de bedragen, True/False = met de hand overruled
     st.session_state.setdefault("onderhandeld_keuze", None)
+    st.session_state.setdefault("nogmaals", None)     # wat er net is vastgelegd
+    # Is dit mandje via "nog een" gevuld? Dan is de herhaling gewild en hoeft de
+    # dubbel-check er niet naar te vragen.
+    st.session_state.setdefault("bewust_herhaald", False)
 
     # Widget-state opruimen kan alleen vóórdat de widgets van deze run bestaan;
     # daarom zetten de knoppen hieronder een vlag en gebeurt het werk hier.
@@ -653,6 +661,7 @@ def init_state():
         # De richting hoort niet te blijven hangen: anders boekt de trade daarna
         # ongemerkt de verkeerde kant op.
         st.session_state["onderhandeld_keuze"] = None
+        st.session_state["bewust_herhaald"] = False
         st.session_state.pop("prijs_modus", None)
         st.session_state.pop("cash_richting", None)
         st.session_state["dubbel_vraag"] = None
@@ -687,6 +696,7 @@ def voeg_toe(*, item_id, naam, kenmerk="", conditie="", voorraad=0, prijs=None,
     st.session_state["bevestiging"] = None
     st.session_state["fout"] = None
     st.session_state["dubbel_vraag"] = None
+    st.session_state["bewust_herhaald"] = False
     st.session_state["_leeg_zoek"] = True
 
 
@@ -768,8 +778,13 @@ def mandje_totaal() -> float:
     return sum(float(r["bedrag"]) * regel_stuks(r["rid"]) for r in mandje)
 
 
-def na_succes(naam: str, bedrag: float, tx_ids: list[int] | None = None):
-    st.session_state["bevestiging"] = f"✓ {naam} — €{bedrag:,.2f}"
+def na_succes(naam: str, bedrag: float, tx_ids: list[int] | None = None,
+              herhaal: list[dict] | None = None):
+    st.session_state["bevestiging"] = f"✓ Vastgelegd — {naam} · €{bedrag:,.2f}"
+    # Wat er net wegging, om het met één tik nog eens te kunnen doen. Vijf keer
+    # hetzelfde pakje aan vijf klanten is op een beurs eerder regel dan
+    # uitzondering, en dan is opnieuw zoeken puur tikwerk.
+    st.session_state["nogmaals"] = herhaal or None
     st.session_state["fout"] = None
     st.session_state["tx_versie"] += 1
     if tx_ids:
@@ -891,6 +906,28 @@ if VANDAAG not in BEURSDAGEN:
 if st.session_state["bevestiging"]:
     st.markdown(f'<div class="tc-ok">{st.session_state["bevestiging"]}</div>',
                 unsafe_allow_html=True)
+
+# Nog een: dezelfde kaart tegen dezelfde prijs, zonder opnieuw te zoeken. Alleen
+# zolang het mandje leeg is — met iets in het mandje zou de knop er een tweede
+# stapel bovenop gooien en dat is niet wat "nog een" betekent.
+_nogmaals = st.session_state.get("nogmaals")
+if _nogmaals and not st.session_state["mandje"]:
+    _label = (_nogmaals[0]["naam"] if len(_nogmaals) == 1
+              else f"{len(_nogmaals)} kaarten")
+    if st.button(f"↻ Nog een — {_label[:34]}", key="nogmaals_knop", width="stretch"):
+        for regel in _nogmaals:
+            voeg_toe(item_id=regel["id"], naam=regel["naam"],
+                     kenmerk=regel["kenmerk"], conditie=regel["conditie"],
+                     voorraad=regel["voorraad"], prijs=regel["prijs"],
+                     prijs_bron=regel["prijs_bron"], code=regel["code"])
+            # De prijs van zojuist, niet de comp: dat is de gangbare prijs
+            # geworden. Aantal begint weer op 1 — "nog een" is er één.
+            st.session_state["mandje"][-1]["bedrag"] = regel["bedrag"]
+        # Deze herhaling is gewild: de dubbel-check hoeft er niet naar te vragen.
+        # Anders kost vijf keer hetzelfde pakje vier keer "ja, toch vastleggen",
+        # en dan is de knop zijn nut kwijt.
+        st.session_state["bewust_herhaald"] = True
+        st.rerun()
 
 if st.session_state["fout"]:
     st.error(st.session_state["fout"]["melding"], icon="⚠️")
@@ -1141,7 +1178,8 @@ if (klik or bevestigd) and mandje:
         eerste = mandje[0]
         al_gezien = (lijkt_dubbel(recent_voor_check, eerste["id"], TOTAAL,
                                   eerste["naam"])
-                     if klik and not TRADE and len(mandje) == 1 else None)
+                     if klik and not TRADE and len(mandje) == 1
+                     and not st.session_state.get("bewust_herhaald") else None)
         if al_gezien:
             st.session_state["dubbel_vraag"] = {
                 "naam": eerste["naam"], "bedrag": TOTAAL, **al_gezien}
@@ -1192,7 +1230,16 @@ if (klik or bevestigd) and mandje:
                 label = f"{regel_stuks(eerste['rid'])}× {eerste['naam']}"
             else:
                 label = eerste["naam"]
-            na_succes(label, TOTAAL, geschreven)
+            # Alleen bij verkoop: een trade tweemaal doen betekent dezelfde
+            # kaarten nóg eens weggeven, en de cash en de binnenkomst horen er
+            # dan toch bij getypt te worden.
+            herhaal = None if TRADE else [
+                {"id": r["id"], "naam": r["naam"], "kenmerk": r["kenmerk"],
+                 "conditie": r["conditie"], "voorraad": r["voorraad"],
+                 "prijs": r["prijs"], "prijs_bron": r["prijs_bron"],
+                 "code": r["code"], "bedrag": float(r["bedrag"])}
+                for r in mandje]
+            na_succes(label, TOTAAL, geschreven, herhaal)
         except SQLAlchemyError as e:
             engine().dispose()
             # Halverwege vastgelopen: wat er al in staat blijft staan en is via
@@ -1244,6 +1291,8 @@ if mijn:
                 st.session_state["bevestiging"] = (
                     f"↩ Verwijderd: {laatste['naam']} — €{laatste['bedrag']:,.2f}"
                     if weg else f"↩ {laatste['naam']} stond er al niet meer in.")
+                # Wat je net hebt teruggedraaid wil je niet met één tik terug.
+                st.session_state["nogmaals"] = None
                 st.rerun()
             except RuntimeError as e:
                 st.session_state["undo_vraag"] = False

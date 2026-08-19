@@ -836,6 +836,102 @@ def presets_tests(AppTest, db):
     print()
 
 
+def nogmaals_tests(AppTest, db):
+    """Nog een: dezelfde kaart tegen dezelfde prijs, zonder opnieuw te zoeken."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("NOG EEN — hetzelfde pakje aan de volgende klant")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+    check(not any(b.key == "nogmaals_knop" for b in at.button),
+          "vóór de eerste invoer is er niets om te herhalen")
+
+    kop("A.", "Verkoop ik hetzelfde pakje aan vijf klanten zonder opnieuw te zoeken?",
+        "5× tikken op NOG EEN + VASTLEGGEN geeft 5 losse regels van €12")
+    at.button(key=[b for b in snelknoppen(at) if "Prismatic" in b.label][0].key).click().run()
+    zet_prijs(at, 0, 12.0)          # afgedongen van €15
+    at.button(key="vastleggen").click().run()
+    check(at.session_state["bevestiging"] ==
+          "✓ Vastgelegd — Prismatic booster · €12.00",
+          f"bevestiging: {at.session_state['bevestiging']}")
+    check(bool(at.button(key="nogmaals_knop")), "de nog-een-knop staat er na de invoer")
+    check("Prismatic booster" in at.button(key="nogmaals_knop").label,
+          f"met de naam erop ({at.button(key='nogmaals_knop').label})")
+
+    for _ in range(4):
+        at.button(key="nogmaals_knop").click().run()
+        check(prijsvelden(at)[0].value == 12.0,
+              "de afgedongen prijs komt terug, niet de comp-prijs")
+        at.button(key="vastleggen").click().run()
+
+    r = rijen(engine)
+    check(len(r) == 5, f"vijf losse verkopen (kreeg {len(r)})")
+    check([float(x["bedrag"]) for x in r] == [12.0] * 5,
+          f"allemaal €12 ({[float(x['bedrag']) for x in r]})")
+    check(all(x["stuks"] == 1 for x in r), "elk één stuk — 'nog een' is er één")
+    check(all(x["group_id"] is None for x in r),
+          "vijf losse klanten, dus geen groep")
+    check(all(x["onderhandeld"] for x in r),
+          "en alle vijf als onderhandeld gemarkeerd (€12 tegen comp €15)")
+    check(at.session_state["dubbel_vraag"] is None,
+          "geen dubbel-vraag onderweg: via NOG EEN is de herhaling gewild")
+    uitkomst(f"{len(r)} regels van €12,00 · "
+             f"tikken: 1 snelknop + 1 prijs + 5× (nog een + vastleggen)")
+
+    # ... maar een gewone dubbele tik vraagt nog steeds wel ------------------
+    at.button(key=[b for b in snelknoppen(at) if "Prismatic" in b.label][0].key).click().run()
+    zet_prijs(at, 0, 12.0)
+    at.button(key="vastleggen").click().run()
+    check(at.session_state["dubbel_vraag"] is not None,
+          "dezelfde kaart opnieuw ingetikt vraagt wél om bevestiging")
+    at.button(key="dubbel_nee").click().run()
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    check(len(rijen(engine)) == 5, "en die is niet geboekt")
+
+    # --- de knop verdwijnt als er iets in het mandje ligt ------------------
+    kies(at, "charizard")
+    check(not any(b.key == "nogmaals_knop" for b in at.button),
+          "met iets in het mandje verdwijnt de knop — hij hoort er niets bij te gooien")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    check(bool(at.button(key="nogmaals_knop")), "en komt terug zodra het mandje leeg is")
+
+    # --- undo haalt 'm weg -------------------------------------------------
+    at.button(key="undo").click().run()
+    at.button(key="undo_ja").click().run()
+    check(not any(b.key == "nogmaals_knop" for b in at.button),
+          "wat je net hebt teruggedraaid krijg je niet met één tik terug")
+    check(len(rijen(engine)) == 4, "en de undo heeft gewoon gewerkt")
+
+    # --- een heel mandje herhalen -----------------------------------------
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    at.button(key="vastleggen").click().run()
+    check("2 kaarten" in at.button(key="nogmaals_knop").label,
+          f"een mandje van twee heet ook zo ({at.button(key='nogmaals_knop').label})")
+    at.button(key="nogmaals_knop").click().run()
+    check(mandje_namen(at) == ["Umbreon VMAX (Alternate Art)",
+                               "Charizard ex (Special Illustration)"],
+          f"beide kaarten komen terug ({mandje_namen(at)})")
+
+    # --- na een trade geen herhaling --------------------------------------
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+    at.segmented_control(key="modus").set_value("TRADE").run()
+    kies(at, "charizard")
+    at.button(key="vastleggen").click().run()
+    check(not any(b.key == "nogmaals_knop" for b in at.button),
+          "een trade herhaal je niet met één tik — dezelfde kaarten nóg eens weggeven")
+    print()
+
+
 def scenarios(AppTest, db):
     """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
     'verwacht → resultaat' per stap."""
@@ -1051,7 +1147,8 @@ def main():
     # --- reset + bevestiging ---------------------------------------------
     check(at.session_state["mandje"] == [], "mandje leeg na vastleggen")
     bev = at.session_state["bevestiging"]
-    check(bev == "✓ Umbreon VMAX (Alternate Art) — €430.00", f"korte bevestiging: {bev}")
+    check(bev == "✓ Vastgelegd — Umbreon VMAX (Alternate Art) · €430.00",
+          f"bevestiging noemt wat en hoeveel: {bev}")
     check(any("tc-ok" in m.value and bev in m.value for m in at.markdown),
           "bevestiging staat als vervagend blok op het scherm")
     check(dagtotaal(at) == "Vandaag: verkoop €430 · trades: 0",
@@ -1162,6 +1259,7 @@ def main():
     trade_tests(AppTest, db)
     snelknoppen_tests(AppTest, db)
     presets_tests(AppTest, db)
+    nogmaals_tests(AppTest, db)
     nieuwe_features(AppTest, db)
     kern_snel(AppTest, db)
     scenarios(AppTest, db)
