@@ -248,11 +248,11 @@ Elf naam+code-combinaties staan bewust twee keer in v7. Bij zeven zie je meteen 
 iemand later gaat twijfelen of het een dubbeling is. Die hebben nu een notitie in
 kolom S:
 
-- **Shining Magikarp 66/64** — dit zijn **twee verschillende kaarten** en ze mogen nooit
-  samengevoegd worden: rij 71 (€42) is de Celebrations-reprint, rij 754 (€350) de
-  vintage raw uit Neo Revelation. Let op dat er óók een derde is: rij 565, een Slab
-  PSA 5 van €351 zonder code. Die prijs lijkt verdacht veel op die van rij 754 —
-  verwar ze niet.
+- **Shining Magikarp — drie verschillende kaarten**, die nooit samengevoegd mogen
+  worden: rij 71 (€42) is de Celebrations-reprint, rij 754 (€350) de vintage raw uit
+  Neo Revelation, en rij 565 een Slab PSA 5 van €351 zonder code. Die laatste twee
+  schelen één euro in prijs; alle drie dragen daarom een notitie die naar de andere
+  twee verwijst.
 - **Pika van Gogh** (rij 539/540) en **Umbreon slabs** (rij 566/576) — hier stond het
   antwoord al in de **Grading**-kolom: PSA 9 tegen PSA 10, en EN PSA 8 tegen JP PSA 9.
   Die kolom wordt makkelijk over het hoofd gezien, dus staat het nu ook in de notitie.
