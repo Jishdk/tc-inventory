@@ -58,6 +58,26 @@ CASH_BIJLEGGEN = "WIJ LEGGEN BIJ €"
 CASH_RICHTINGEN = [CASH_ONTVANGEN, CASH_BIJLEGGEN]
 MAX_RESULTATEN = 10
 
+# Hardlopers: één tik zet het product in het mandje met zijn eigen prijs erbij.
+# `knop` is wat er op de knop staat — kort houden, het moet naast twee andere op
+# een telefoon passen. `zoek` is waarmee we het échte item opzoeken, met dezelfde
+# zoekfunctie als de zoekbalk. Optioneel `code` om te scheiden als één zoekterm
+# meerdere gelijknamige kaarten raakt.
+#
+# Levert een zoekterm niet precies één item op, dan verschijnt de knop niet: een
+# verkeerd product in het mandje is erger dan een knop die er niet is. Welke er
+# afvielen staat in een grijze regel onder de rij, zodat een verouderde lijst
+# opvalt in plaats van stil te verdwijnen.
+SNELKNOPPEN = [
+    {"knop": "Prismatic", "zoek": "prismatic booster"},
+    {"knop": "Twilight", "zoek": "twilight masquerade booster"},
+    {"knop": "Sleeved", "zoek": "sleeved booster"},
+    {"knop": "Tins", "zoek": "tins"},
+    {"knop": "Mega Dream", "zoek": "mega dream"},
+    {"knop": "Black Bolt", "zoek": "black bolt"},
+]
+SNELKNOPPEN_PER_RIJ = 3   # drie naast elkaar past op 390 px; Streamlit wrapt niet zelf
+
 st.set_page_config(page_title="TC Beurs", page_icon="🃏", layout="centered")
 
 
@@ -113,6 +133,12 @@ BASIS_CSS = """
       padding: .45rem .7rem; margin-bottom: .1rem; text-align: center;
       font-size: .92rem; opacity: .8; line-height: 1.4;}
   .tc-dag b {font-weight: 700; opacity: 1;}
+
+  /* snelknoppen: compact, twee regels (naam + prijs), links uitgelijnd */
+  [class*="st-key-snel_"] button {min-height: 3.1rem; padding: .35rem .5rem;}
+  [class*="st-key-snel_"] button p {white-space: pre-line; margin: 0;
+      line-height: 1.25; font-size: .92rem; font-weight: 600;}
+  [class*="st-key-snel_"] button p span {font-size: .8rem; font-weight: 400;}
 
   /* zoekbalk: prominent */
   .st-key-zoekterm input {font-size: 1.25rem !important;
@@ -541,6 +567,27 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
     return None
 
 
+def zoek_snelknoppen(df: pd.DataFrame) -> tuple[list, list]:
+    """Elke snelknop naar precies één item, of niet.
+
+    Geeft (gevonden, mislukt) terug: gevonden is een lijst van (config, item), en
+    mislukt bevat de knoppen met nul of meerdere treffers plus dat aantal. We
+    raden nooit — bij "tins" kan er zomaar een tweede tin bijkomen, en dan hoort
+    de knop te verdwijnen tot iemand de lijst bijwerkt."""
+    gevonden, mislukt = [], []
+    for conf in SNELKNOPPEN:
+        treffers = zoek(df, conf["zoek"])
+        code = (conf.get("code") or "").strip().lower()
+        if code and not treffers.empty:
+            treffers = treffers[treffers.apply(
+                lambda r: kenmerk(r).lower() == code, axis=1)]
+        if len(treffers) == 1:
+            gevonden.append((conf, als_dict(treffers.iloc[0])))
+        else:
+            mislukt.append((conf, len(treffers)))
+    return gevonden, mislukt
+
+
 def als_dict(r) -> dict:
     return {"id": int(r["id"]), "naam": r["naam"], "kenmerk": kenmerk(r),
             "conditie": conditie(r), "aantal": int(r["aantal"]),
@@ -823,6 +870,33 @@ except SQLAlchemyError:
 # VASTLEGGEN is nog steeds drie handelingen.
 
 mandje = st.session_state["mandje"]
+
+# --- snelknoppen: de producten waar tientallen van liggen -------------------
+# Boven de zoekbalk, want voor deze paar is zoeken de omweg. Drie per rij:
+# Streamlit's kolommen wrappen niet, en op 390 px is dat de breedte waarop de
+# tekst nog leesbaar blijft.
+snel_gevonden, snel_mislukt = zoek_snelknoppen(items)
+for begin in range(0, len(snel_gevonden), SNELKNOPPEN_PER_RIJ):
+    rij = snel_gevonden[begin:begin + SNELKNOPPEN_PER_RIJ]
+    kolommen = st.columns(SNELKNOPPEN_PER_RIJ, vertical_alignment="center")
+    for kolom, (conf, item) in zip(kolommen, rij):
+        # Prijs op de knop: dan weet je vóór het tikken of hij nog goed staat.
+        prijs = f"€{geld(item['prijs'])}" if item["prijs"] else "€ ?"
+        with kolom:
+            if st.button(f"{conf['knop']}\n:gray[{prijs}]", key=f"snel_{item['id']}",
+                         width="stretch"):
+                voeg_toe(item_id=item["id"], naam=item["naam"],
+                         kenmerk=item["kenmerk"], conditie=item["conditie"],
+                         voorraad=item["aantal"], prijs=item["prijs"],
+                         prijs_bron=item["prijs_bron"], code=item["kenmerk"])
+                st.rerun()
+
+if snel_mislukt:
+    # Klein en grijs: het is een signaal voor wie de lijst beheert, geen
+    # waarschuwing voor wie staat te verkopen.
+    uitleg = ", ".join(f"{c['knop']} ({n} treffers)" for c, n in snel_mislukt)
+    st.markdown(f'<div class="tc-note">Snelknop zonder eenduidige kaart: {uitleg}'
+                f'</div>', unsafe_allow_html=True)
 
 st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
               label_visibility="collapsed")

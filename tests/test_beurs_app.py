@@ -79,6 +79,17 @@ ALLEEN_CM = [
     ("151 ETB", None, "Sealed", "NM", None, 500.00, 475.00, 6),
 ]
 
+# De producten waar de snelknoppen (SNELKNOPPEN in de app) op mikken. Zelfde vorm
+# als ALLEEN_CM. Bewust géén "Twilight Masquerade booster": die staat ook in de
+# echte v7 niet, en dat is precies het geval dat de knop moet laten wegvallen.
+HARDLOPERS = [
+    ("Prismatic booster", None, "Sealed", "NM", None, 15.00, None, 52),
+    ("Phantasamal Flames sleeved booster", "me02", "Sealed", "NM", None, 14.00, None, 283),
+    ("Cosmic Eclipse tins", None, "Sealed", "NM", None, 85.00, None, 4),
+    ("Mega Dream", "m2a", "Sealed", "NM", None, 95.00, None, 24),
+    ("Black Bolt", "sv11b", "Sealed", "NM", None, 120.00, None, 0),
+]
+
 fouten = []
 
 
@@ -118,6 +129,10 @@ def kies(at, term: str, filter_op: str = ""):
     if filter_op:
         treffers = [b for b in treffers if filter_op in b.label]
     at.button(key=treffers[0].key).click().run()
+
+
+def snelknoppen(at) -> list:
+    return knoppen(at, "snel_")
 
 
 def mandje_namen(at) -> list:
@@ -174,7 +189,7 @@ def maak_engine():
                 "VALUES (:a,:b,:c,:d,:e,:f,:g,:h,:i)"),
                 {"a": onze, "b": off, "c": code, "d": setc, "e": cat, "f": staat,
                  "g": grade, "h": prijs, "i": aantal})
-        for naam, code, cat, staat, grade, comp, cm, aantal in ALLEEN_CM:
+        for naam, code, cat, staat, grade, comp, cm, aantal in ALLEEN_CM + HARDLOPERS:
             c.execute(text(
                 "INSERT INTO items (onze_naam, code, categorie, staat, grade, "
                 "comp_prijs, prijs_cm, aantal) VALUES (:a,:b,:c,:d,:e,:f,:g,:h)"),
@@ -620,6 +635,84 @@ def trade_tests(AppTest, db):
     print()
 
 
+def snelknoppen_tests(AppTest, db):
+    """Snelknoppen voor hardlopers: verschijnen alleen bij precies één treffer, en
+    één tik zet het product met zijn eigen prijs in het mandje."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("SNELKNOPPEN — hardlopers met één tik")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    labels = [b.label for b in snelknoppen(at)]
+    check(len(labels) == 5, f"vijf van de zes snelknoppen resolven ({len(labels)})")
+    check(all(x in " ".join(labels) for x in
+              ("Prismatic", "Sleeved", "Tins", "Mega Dream", "Black Bolt")),
+          f"de knoppen die eenduidig zijn staan er ({labels})")
+    check(not any("Twilight" in lb for lb in labels),
+          "een snelknop zonder kaart in de inventaris verschijnt niet")
+    tekst = " ".join(m.value for m in at.markdown)
+    check("Snelknop zonder eenduidige kaart: Twilight (0 treffers)" in tekst,
+          "en wordt wél gemeld, zodat een verouderde lijst opvalt")
+    check(any("€15" in lb for lb in labels) and any("€120" in lb for lb in labels),
+          f"de prijs staat op de knop ({labels})")
+    uitkomst(*[lb.replace("\n", "  ") for lb in labels])
+
+    # --- één tik = in het mandje, met prijs -------------------------------
+    knop = [b for b in snelknoppen(at) if "Prismatic" in b.label][0]
+    at.button(key=knop.key).click().run()
+    check(mandje_namen(at) == ["Prismatic booster"],
+          f"één tik zet het product in het mandje ({mandje_namen(at)})")
+    check(prijsvelden(at)[0].value == 15.0,
+          f"met de comp-prijs erbij ({prijsvelden(at)[0].value})")
+
+    rid = at.session_state["mandje"][0]["rid"]
+    at.button(key=f"plus_{rid}").click().run()
+    at.button(key=f"plus_{rid}").click().run()
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    check(len(r) == 1 and float(r[0]["bedrag"]) == 45.0 and r[0]["stuks"] == 3,
+          f"3 × €15 = €45 in één regel ({[(float(x['bedrag']), x['stuks']) for x in r]})")
+    check(r[0]["item_id"] is not None,
+          "gekoppeld aan het echte item — dus de voorraad boekt af")
+    uitkomst(toon(r[0]) + f"  stuks={r[0]['stuks']}")
+
+    # --- prijs blijft overschrijfbaar bij onderhandelen -------------------
+    knop = [b for b in snelknoppen(at) if "Mega Dream" in b.label][0]
+    at.button(key=knop.key).click().run()
+    zet_prijs(at, 0, 85.0)
+    at.button(key="vastleggen").click().run()
+    check(float(rijen(engine)[-1]["bedrag"]) == 85.0,
+          "de voorgevulde prijs is gewoon te overschrijven")
+
+    # --- uitverkochte hardloper mag, met melding --------------------------
+    knop = [b for b in snelknoppen(at) if "Black Bolt" in b.label][0]
+    at.button(key=knop.key).click().run()
+    check("UITVERKOCHT" in " ".join(m.value for m in at.markdown),
+          "een uitverkochte hardloper waarschuwt in het mandje")
+    check(not at.button(key="vastleggen").disabled,
+          "maar blokkeert niet — de voorraadstand loopt achter")
+    at.button(key=knoppen(at, "weg_")[0].key).click().run()
+
+    # --- ook naast een gezochte kaart te gebruiken -----------------------
+    kies(at, "charizard")
+    knop = [b for b in snelknoppen(at) if "Sleeved" in b.label][0]
+    at.button(key=knop.key).click().run()
+    check(len(at.session_state["mandje"]) == 2,
+          "een snelknop schuift aan bij wat er al in het mandje ligt")
+    check([p.value for p in prijsvelden(at)] == [120.0, 14.0],
+          f"beide met hun eigen prijs ({[p.value for p in prijsvelden(at)]})")
+    print()
+
+
 def scenarios(AppTest, db):
     """Scenario's die de vragen uit de opdracht beantwoorden, met een leesbaar
     'verwacht → resultaat' per stap."""
@@ -944,6 +1037,7 @@ def main():
 
     mandje_tests(AppTest, db)
     trade_tests(AppTest, db)
+    snelknoppen_tests(AppTest, db)
     nieuwe_features(AppTest, db)
     kern_snel(AppTest, db)
     scenarios(AppTest, db)
