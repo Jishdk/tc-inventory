@@ -131,6 +131,38 @@ zoeken → tikken → VASTLEGGEN. Daar staat een test op (`kern_snel`).
   dan er ligt geeft een melding, maar blokkeert nooit — de stand loopt achter zodra er
   buiten de app om iets is verkocht.
 
+### Productfoto's: onderzocht en niet gebouwd (19-08-2026)
+
+Het plan was een thumbnail bij een zoekresultaat, gebouwd uit `items.cardmarket_id`.
+**Dat kan niet, en de feature is daarna bewust afgeblazen.** Hier staat waarom, zodat
+niemand dezelfde ronde nog eens doet.
+
+- **De URL is niet af te leiden.** De afbeelding staat op
+  `images.tcggo.com/tcggo/storage/<nummer>/<slug>.png`. Dat nummer is een intern
+  opslag-id dat niet met `cardmarket_id` correleert (bereik 1.4k–32k tegen 276k–869k,
+  en niet monotoon), en de slug is inconsistent: 152 van 167 met set+nummer, 15 met
+  alleen de kaartnaam (`klang.png`).
+- **Opzoeken kán wel, betrouwbaar.** `GET /pokemon/cards?cardmarket_id=<id>` op de
+  RapidAPI-host geeft precies één treffer — 15 van 15 op een steekproef uit onze eigen
+  id's, ~0,26 s per call. De respons bevat `image` én `tcgid` (`swsh12-140`, het
+  formaat van pokemontcg.io, waaruit `images.pokemontcg.io/<set>/<nummer>.png` wél
+  af te leiden is — ~180 kB in plaats van ~700, maar 404 op de nieuwste sets).
+- **De dekking is 42% en precies verkeerd verdeeld:** single 321/660, **Slab 0/64,
+  Sealed 0/39**. Van de tien duurste items heeft er één een `cardmarket_id`. De foto
+  moest helpen bij het kiezen van een variant, en verschijnt juist niet bij de dure
+  voorraad.
+- **De plaatjes zijn 556–854 kB** en de CDN kent geen resize-parameters (`?w=80`,
+  `?width=80`, `?tr=w-80` geven alle drie dezelfde bytes). Tien zoekresultaten is ~7 MB
+  voor thumbnails van 40 px.
+- **Live opzoeken tijdens de beurs kan sowieso niet** (3.000 calls/dag, 0,26 s per
+  resultaat). Het zou hoe dan ook een opgeslagen kolom moeten worden, eenmalig gevuld
+  met een batch van 321 calls.
+
+Wil je het later alsnog: de route is een migratie met `items.image_url` (+ `tcgid`), een
+eenmalig vulscript, en de verrijking meenemen bij elke v7-import — net zoals
+`officiele_naam`/`set_code` nu al worden overgenomen. De tekstregel bij een zoekresultaat
+(set-code, staat/grade, prijs, voorraad) dekt nu 100% en kost niets.
+
 ### Drie valkuilen die headless niet te zien zijn
 
 Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de screenshots.
