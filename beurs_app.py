@@ -26,7 +26,7 @@ import math
 import os
 import sys
 import unicodedata
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 import pandas as pd
@@ -218,10 +218,10 @@ RETURNING id
 INSERT_TX = text("""
 INSERT INTO transactions (
     event_id, item_id, datum, tijd, kanaal, type, bedrag, afzender, flag,
-    ruwe_tekst, code
+    ruwe_tekst, code, stuks
 ) VALUES (
     :event_id, :item_id, :datum, :tijd, :kanaal, :type, :bedrag, :afzender,
-    :flag, :ruwe_tekst, :code
+    :flag, :ruwe_tekst, :code, :stuks
 )
 RETURNING id
 """)
@@ -245,9 +245,12 @@ TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
 def laad_items() -> pd.DataFrame:
     df = lees("""
         SELECT id, onze_naam, officiele_naam, code, set_code, categorie, staat,
-               grade, comp_prijs, prijs_cm
+               grade, comp_prijs, prijs_cm, aantal
         FROM items ORDER BY officiele_naam NULLS LAST, onze_naam
     """)
+    # Voorraad kan negatief zijn (er is meer verkocht dan de inventaris wist);
+    # dat is informatie, geen fout, dus niet afkappen op nul.
+    df["aantal"] = pd.to_numeric(df["aantal"], errors="coerce").fillna(0).astype(int)
     for kolom in ("comp_prijs", "prijs_cm"):
         df[kolom] = pd.to_numeric(df[kolom], errors="coerce")
     # Werkprijs: comp waar die er is, anders de Cardmarket/eBay-prijs. Slabs en
@@ -276,12 +279,29 @@ def conditie(rij) -> str:
     return " ".join(x for x in (rij["staat"], rij["grade"]) if x)
 
 
+def voorraad_tekst(aantal: int) -> str:
+    """Kort label voor bij een zoekresultaat: zie je dat je de laatste verkoopt?"""
+    n = int(aantal)
+    if n <= 0:
+        return "UITVERKOCHT"
+    return f"{n} op voorraad"
+
+
+def voorraad_klasse(aantal: int) -> str:
+    """Kleurklasse: rood bij niets meer, oranje bij de laatste, anders rustig."""
+    n = int(aantal)
+    if n <= 0:
+        return "tc-op"
+    return "tc-laatste" if n == 1 else "tc-voorraad"
+
+
 @st.cache_data(ttl=20, show_spinner=False)
 def laatste_transacties(eid: int, versie: int) -> pd.DataFrame:
     """`versie` telt op na elke eigen invoer en breekt zo de cache open — géén
     underscore-prefix, want die sluit een argument uit van de cache-sleutel."""
     return lees("""
-        SELECT t.tijd, t.type, t.bedrag, t.afzender, t.ruwe_tekst, t.flag
+        SELECT t.id, t.item_id, t.datum, t.tijd, t.type, t.bedrag, t.afzender,
+               t.ruwe_tekst, t.flag, t.stuks
         FROM transactions t WHERE t.event_id = :eid
         ORDER BY t.id DESC LIMIT 10
     """, {"eid": eid})
@@ -300,12 +320,17 @@ def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, float]:
 
 
 def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
-                       code=None) -> int:
+                       code=None, stuks=1) -> int:
     """Eén losse insert. Geen retry: een dubbel geboekte verkoop is erger dan
     een foutmelding waarna je zelf opnieuw tikt.
 
     `code` is de kaartcode ("173/195", "EVS 215"). Bij een vrij ingevoerde kaart
-    is dat het enige haakje om 'm later alsnog aan de inventaris te koppelen."""
+    is dat het enige haakje om 'm later alsnog aan de inventaris te koppelen.
+
+    `bedrag` is altijd het TOTAAL van de regel en `stuks` hoeveel kaarten dat
+    dekt — dus 3 pakjes van €15 wordt bedrag 45, stuks 3. `afboeken_sales.py`
+    haalt er `coalesce(stuks, 1)` van de voorraad af. Dit vervangt de oude
+    workaround waarbij het restant als regels van €0,01 werd geboekt."""
     nu = datetime.now()
     with engine().begin() as conn:
         return conn.execute(INSERT_TX, {
@@ -320,7 +345,60 @@ def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
             "flag": flag,
             "ruwe_tekst": ruwe_tekst,
             "code": (code or "").strip() or None,
+            "stuks": int(stuks or 1),
         }).scalar()
+
+
+DUBBEL_VENSTER = 120        # seconden waarbinnen dezelfde invoer verdacht is
+
+
+def lijkt_dubbel(recent, item_id, bedrag: float, ruwe_tekst: str,
+                 nu: datetime | None = None) -> dict | None:
+    """Staat dezelfde kaart voor hetzelfde bedrag er net al in?
+
+    Kijkt naar de laatste transacties van dit event — dus ook naar wat een
+    collega zojuist heeft geboekt, niet alleen naar de eigen telefoon. Twee
+    losse pakjes van hetzelfde soort ná elkaar verkopen mag gewoon; daarom
+    waarschuwen we alleen, en blokkeren we nooit."""
+    if recent is None or getattr(recent, "empty", True):
+        return None
+    nu = nu or datetime.now()
+    for _, r in recent.iterrows():
+        try:
+            bedrag_r = float(pd.to_numeric(r["bedrag"], errors="coerce"))
+        except (TypeError, ValueError):
+            continue
+        if abs(bedrag_r - float(bedrag)) > 0.005:
+            continue
+        # Zelfde kaart: op item_id als die er is, anders op de getypte tekst.
+        zelfde = (int(r["item_id"]) == int(item_id)
+                  if item_id is not None and pd.notna(r["item_id"])
+                  else (r["item_id"] is None or pd.isna(r["item_id"]))
+                  and str(r["ruwe_tekst"] or "").strip().lower()
+                  == str(ruwe_tekst or "").strip().lower())
+        if not zelfde:
+            continue
+        seconden = _seconden_geleden(r, nu)
+        if seconden is not None and seconden <= DUBBEL_VENSTER:
+            return {"tijd": str(r["tijd"])[:8], "seconden": int(seconden),
+                    "bedrag": bedrag_r, "afzender": r.get("afzender")}
+    return None
+
+
+def _seconden_geleden(rij, nu: datetime) -> float | None:
+    """Hoe lang geleden is deze regel geboekt? None als de tijd onleesbaar is."""
+    tijd, dag = rij.get("tijd"), rij.get("datum")
+    if tijd is None or (isinstance(tijd, float) and pd.isna(tijd)):
+        return None
+    try:
+        t = tijd if isinstance(tijd, time) else time.fromisoformat(str(tijd)[:8])
+        d = nu.date()
+        if dag is not None and not (isinstance(dag, float) and pd.isna(dag)):
+            d = dag if isinstance(dag, date) else date.fromisoformat(str(dag)[:10])
+    except (TypeError, ValueError):
+        return None
+    verschil = (nu - datetime.combine(d, t)).total_seconds()
+    return verschil if verschil >= 0 else None
 
 
 def verwijder_transactie(tx_id: int) -> int:
@@ -369,7 +447,9 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
             # Cardmarket-prijs op een afgesproken verkoopprijs.
             prijs = (f"€{r['prijs']:,.2f}" + (" cm" if r["prijs_bron"] == "cm" else "")
                      if pd.notna(r["prijs"]) else "€ ?")
-            detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs] if x)
+            # Voorraad achteraan: zo zie je vóór het tikken of dit de laatste is.
+            detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs,
+                                            voorraad_tekst(r["aantal"])] if x)
             # Zachte regelafbreking (\n) + CSS `white-space: pre-line` geeft de
             # tweede regel; :gray[] maakt er een span van die klein wordt gezet.
             if st.button(f"{r['naam']}\n:gray[{detail}]", key=f"{prefix}{r['id']}",
@@ -382,7 +462,7 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
 
 def als_dict(r) -> dict:
     return {"id": int(r["id"]), "naam": r["naam"], "kenmerk": kenmerk(r),
-            "conditie": conditie(r),
+            "conditie": conditie(r), "aantal": int(r["aantal"]),
             "prijs": None if pd.isna(r["prijs"]) else float(r["prijs"]),
             "prijs_bron": r["prijs_bron"]}
 
@@ -400,6 +480,9 @@ def init_state():
     st.session_state.setdefault("bevestiging", None)
     st.session_state.setdefault("fout", None)
     st.session_state.setdefault("tx_versie", 0)       # tikt de lijst-cache aan
+    st.session_state.setdefault("stuks", 1)           # aantal kaarten in deze regel
+    st.session_state.setdefault("prijs_modus", "Per stuk")
+    st.session_state.setdefault("dubbel_vraag", None)  # wacht op "toch vastleggen"
     if st.session_state.pop("_leeg_zoek", False):
         st.session_state["stapel_zoek"] = ""
         st.session_state["stapel_vrij"] = ""
@@ -417,6 +500,26 @@ def init_state():
         st.session_state["stapel_vrij"] = ""
         st.session_state["stapel_code"] = ""
         st.session_state["totaal_bedrag"] = 0.0
+        st.session_state["stuks"] = 1
+        st.session_state["prijs_modus"] = "Per stuk"
+        st.session_state["dubbel_vraag"] = None
+
+
+def stuks_bij(stap: int):
+    """+/- knop. Minimaal 1: een verkoop van nul kaarten bestaat niet."""
+    st.session_state["stuks"] = max(1, int(st.session_state.get("stuks", 1)) + stap)
+    st.session_state["dubbel_vraag"] = None
+
+
+def totaalbedrag() -> float:
+    """Wat er als bedrag de database in gaat: altijd het totaal van de regel.
+
+    Bij 'Per stuk' is het ingevulde bedrag de stuksprijs en vermenigvuldigen we;
+    bij 'Totaal' is het al het totaal en delen we nergens door — dan is de
+    stuksprijs niet rond en dat hoeft ook niet, het totaal is wat er betaald is."""
+    bedrag = float(st.session_state.get("bedrag") or 0)
+    n = max(1, int(st.session_state.get("stuks", 1)))
+    return bedrag * n if st.session_state.get("prijs_modus") == "Per stuk" else bedrag
 
 
 def prefill_bedrag():
@@ -433,6 +536,9 @@ def kies_item(rij: dict):
     st.session_state["sel"] = rij
     st.session_state["bevestiging"] = None
     st.session_state["fout"] = None
+    st.session_state["stuks"] = 1
+    st.session_state["prijs_modus"] = "Per stuk"
+    st.session_state["dubbel_vraag"] = None
     prefill_bedrag()
 
 
@@ -481,8 +587,23 @@ _modus = st.session_state.get("modus") or "VERKOOP"
 _vrij_modus = st.session_state.get("vrij_modus") or _modus
 KLEUR, VRIJ_KLEUR = MODUS_KLEUR[_modus], MODUS_KLEUR[_vrij_modus]
 
+EXTRA_CSS = """
+  /* voorraad bij de gekozen kaart */
+  .tc-voorraad, .tc-laatste, .tc-op {font-size:.85rem; font-weight:600;
+      margin:-.3rem 0 .5rem;}
+  .tc-voorraad {color:#5b6472;}
+  .tc-laatste  {color:#B26A00;}
+  .tc-op       {color:#C0261A;}
+  /* aantal-teller tussen de +/- knoppen */
+  .tc-stuks {text-align:center; font-size:1.5rem; font-weight:700; line-height:2.4rem;}
+  /* dubbel-waarschuwing: opvalt, maar blokkeert niet */
+  .tc-dubbel {background:#FFF6E0; border-left:4px solid #E8A200; border-radius:6px;
+      padding:.55rem .7rem; font-size:.9rem; margin:.4rem 0;}
+"""
+
 st.markdown(f"""<style>
 {BASIS_CSS}
+{EXTRA_CSS}
   /* :not(:disabled) — een uitgeschakelde knop moet grijs blijven, anders lijkt
      'ie klaar voor gebruik terwijl er nog geen kaart gekozen is. */
   .st-key-vastleggen button:not(:disabled),
@@ -566,6 +687,13 @@ except SQLAlchemyError as e:
     with st.expander("Details"):
         st.code(str(e))
     st.stop()
+
+# Eén keer ophalen en twee keer gebruiken: de dubbel-check hieronder en het
+# logje onderaan. Scheelt een tweede query op een beursnetwerk dat toch al traag is.
+try:
+    recent_voor_check = laatste_transacties(event_id(), st.session_state["tx_versie"])
+except SQLAlchemyError:
+    recent_voor_check = None
 
 if STAPEL_MODUS:
     # --- stapel: meerdere kaarten, één totaalbedrag ------------------------
@@ -653,6 +781,15 @@ else:
         st.markdown(f"### {sel['naam']}")
         if regels:
             st.caption(" · ".join(regels))
+        voorraad = int(sel.get("aantal", 0))
+        st.markdown(f'<div class="{voorraad_klasse(voorraad)}">'
+                    f'{voorraad_tekst(voorraad)}</div>', unsafe_allow_html=True)
+        if voorraad <= 0:
+            # Waarschuwen, niet blokkeren: de voorraadstand loopt achter zodra
+            # er buiten de app om iets is verkocht of bijgekocht.
+            st.markdown('<div class="tc-note">Staat op nul of lager — vastleggen '
+                        'mag, de voorraad klopt dan alleen niet.</div>',
+                        unsafe_allow_html=True)
         if st.button("✕ andere kaart", key="deselect"):
             st.session_state["sel"] = None
             st.rerun()
@@ -684,23 +821,72 @@ else:
                             on_change=reken_eigen_percentage,
                             label_visibility="collapsed")
 
+    # --- aantal -----------------------------------------------------------
+    # Blijft één tik voor het gewone geval: de teller staat op 1 en je hoeft er
+    # niets aan te doen. Pas bij meerdere stuks komt de per-stuk/totaal-keuze
+    # tevoorschijn, zodat de kernflow niet langer wordt voor de 90% die er één
+    # verkoopt.
+    n_stuks = max(1, int(st.session_state.get("stuks", 1)))
+    kol_min, kol_n, kol_plus = st.columns([1, 2, 1], vertical_alignment="center")
+    kol_min.button("−", key="stuks_min", width="stretch", disabled=n_stuks <= 1,
+                   on_click=stuks_bij, args=(-1,))
+    kol_n.markdown(f'<div class="tc-stuks">{n_stuks}&nbsp;×</div>',
+                   unsafe_allow_html=True)
+    kol_plus.button("+", key="stuks_plus", width="stretch",
+                    on_click=stuks_bij, args=(1,))
+
+    if n_stuks > 1:
+        st.segmented_control("Bedrag is", ["Per stuk", "Totaal"], key="prijs_modus",
+                             width="stretch", label_visibility="collapsed",
+                             required=True)
+
     st.number_input("Bedrag", min_value=0.0, step=0.50, format="%.2f", key="bedrag",
                     label_visibility="collapsed")
 
-    if st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
-                 disabled=sel is None, key="vastleggen") and sel:
-        bedrag = float(st.session_state["bedrag"])
-        if bedrag <= 0:
+    TOTAAL = totaalbedrag()
+    if n_stuks > 1 and TOTAAL > 0:
+        per = TOTAAL / n_stuks
+        st.markdown(f'<div class="tc-comp">{n_stuks} × €{geld(per)} = '
+                    f'<b>€{geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
+
+    # --- dubbel-waarschuwing ---------------------------------------------
+    vraag = st.session_state.get("dubbel_vraag")
+    if vraag:
+        st.markdown(f'<div class="tc-dubbel">Net al ingevoerd: {vraag["naam"]} '
+                    f'€{geld(vraag["bedrag"])} om {vraag["tijd"]} '
+                    f'({vraag["seconden"]} s geleden) — toch vastleggen?</div>',
+                    unsafe_allow_html=True)
+        kol_ja, kol_nee = st.columns(2)
+        bevestigd = kol_ja.button("Ja, toch vastleggen", key="dubbel_ja",
+                                  type="primary", width="stretch")
+        if kol_nee.button("Nee, laat maar", key="dubbel_nee", width="stretch"):
+            st.session_state["dubbel_vraag"] = None
+            st.rerun()
+    else:
+        bevestigd = False
+
+    klik = st.button(f"VASTLEGGEN — {MODUS}", type="primary", width="stretch",
+                     disabled=sel is None or bool(vraag), key="vastleggen")
+
+    if (klik or bevestigd) and sel:
+        if TOTAAL <= 0:
             meld_fout("Vul een bedrag in.", "geen database-actie uitgevoerd")
         else:
+            al_gezien = lijkt_dubbel(recent_voor_check, sel["id"], TOTAAL,
+                                     sel["naam"]) if klik else None
+            if al_gezien:
+                st.session_state["dubbel_vraag"] = {
+                    "naam": sel["naam"], "bedrag": TOTAAL, **al_gezien}
+                st.rerun()
             try:
-                tx = schrijf_transactie(item_id=sel["id"], bedrag=bedrag,
+                tx = schrijf_transactie(item_id=sel["id"], bedrag=TOTAAL,
                                         tx_type=TX_TYPE, ruwe_tekst=sel["naam"],
-                                        code=sel.get("kenmerk"))
-                na_succes(sel["naam"], bedrag, tx)
+                                        code=sel.get("kenmerk"), stuks=n_stuks)
+                label = sel["naam"] if n_stuks == 1 else f"{n_stuks}× {sel['naam']}"
+                na_succes(label, TOTAAL, tx)
             except SQLAlchemyError as e:
                 engine().dispose()
-                meld_fout(f"NIET vastgelegd: {sel['naam']} €{bedrag:,.2f}. "
+                meld_fout(f"NIET vastgelegd: {sel['naam']} €{TOTAAL:,.2f}. "
                           "Je invoer staat er nog — probeer opnieuw.", str(e)[:800])
 
     # --- vangnet ----------------------------------------------------------
@@ -770,10 +956,7 @@ if mijn:
 
 # ------------------------------------------------------------------ laatste 10
 
-try:
-    recent = laatste_transacties(event_id(), st.session_state["tx_versie"])
-except SQLAlchemyError:
-    recent = None
+recent = recent_voor_check
 
 if recent is not None and not recent.empty:
     regels = []

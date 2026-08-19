@@ -39,39 +39,43 @@ CREATE TABLE events (
 CREATE TABLE items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, onze_naam TEXT NOT NULL,
     officiele_naam TEXT, code TEXT, set_code TEXT, categorie TEXT,
-    staat TEXT, grade TEXT, comp_prijs NUMERIC, prijs_cm NUMERIC);
+    staat TEXT, grade TEXT, comp_prijs NUMERIC, prijs_cm NUMERIC,
+    aantal INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, item_id INTEGER,
     bron_rij INTEGER, datum DATE NOT NULL, tijd TIME, kanaal TEXT NOT NULL,
     type TEXT NOT NULL, bedrag NUMERIC, afzender TEXT, media_file TEXT,
-    flag TEXT, ruwe_tekst TEXT, code TEXT);
+    flag TEXT, ruwe_tekst TEXT, code TEXT, stuks INTEGER,
+    is_dubbel BOOLEAN NOT NULL DEFAULT 0, opschoon_notitie TEXT,
+    afgeboekt_op TIMESTAMP);
 """
 
 # Zoals de echte data: lege set_code komt voor (187 van 572) en namen zijn dubbel (54x).
 ITEMS = [
-    # onze_naam, officiele_naam, code, set_code, categorie, staat, grade, comp_prijs
+    # onze_naam, officiele_naam, code, set_code, categorie, staat, grade,
+    # comp_prijs, aantal — de voorraad varieert bewust: ruim, precies één, en nul.
     ("Umbreon VMAX", "Umbreon VMAX (Alternate Art)", "215", "EVS 215", "single",
-     "NM", None, 450.00),
-    ("Umbreon V", "Umbreon V", "189", "EVS 189", "single", "NM", None, 45.00),
+     "NM", None, 450.00, 3),
+    ("Umbreon V", "Umbreon V", "189", "EVS 189", "single", "NM", None, 45.00, 1),
     ("Charizard ex", "Charizard ex (Special Illustration)", "223", "OBF 223", "single",
-     "NM", None, 120.00),
+     "NM", None, 120.00, 12),
     ("Pikachu Promo", "Pikachu (Pokémon Center)", "SWSH058", "PR SWSH058", "promo",
-     "NM", None, 12.50),
+     "NM", None, 12.50, 0),
     # gelijknamig paar zonder set_code, alleen te scheiden op staat/grade
-    ("Blastoise slab", "Blastoise", None, None, "graded", None, "PSA 9", 300.00),
-    ("Blastoise los", "Blastoise", None, None, "single", "GD", None, 80.00),
+    ("Blastoise slab", "Blastoise", None, None, "graded", None, "PSA 9", 300.00, 1),
+    ("Blastoise los", "Blastoise", None, None, "single", "GD", None, 80.00, 2),
     # zonder comp_prijs: er valt niets terug te rekenen bij inkoop
-    ("Bulbasaur ruilbak", "Bulbasaur", "001", "BS 001", "single", "MP", None, None),
+    ("Bulbasaur ruilbak", "Bulbasaur", "001", "BS 001", "single", "MP", None, None, 5),
 ]
 
 # Zoals de v6-inventaris: slabs hebben géén comp_prijs, alleen een cm-prijs, en
 # sealed staat zonder officiele_naam/set_code in de tabel.
 # onze_naam, code, categorie, staat, grade, comp_prijs, prijs_cm
 ALLEEN_CM = [
-    ("Pika van Gogh", None, "Slab", "NM", "PSA 9", None, 852.00),
-    ("Shining Gyarados", None, "Slab", "NM", "PSA 8", None, 2300.00),
-    ("Moltres UPC", None, "Sealed", "NM", None, None, 330.00),
-    ("151 ETB", None, "Sealed", "NM", None, 500.00, 475.00),
+    ("Pika van Gogh", None, "Slab", "NM", "PSA 9", None, 852.00, 1),
+    ("Shining Gyarados", None, "Slab", "NM", "PSA 8", None, 2300.00, 1),
+    ("Moltres UPC", None, "Sealed", "NM", None, None, 330.00, 4),
+    ("151 ETB", None, "Sealed", "NM", None, 500.00, 475.00, 6),
 ]
 
 fouten = []
@@ -105,19 +109,19 @@ def maak_engine():
         for stmt in SCHEMA.strip().split(";"):
             if stmt.strip():
                 c.execute(text(stmt))
-        for onze, off, code, setc, cat, staat, grade, prijs in ITEMS:
+        for onze, off, code, setc, cat, staat, grade, prijs, aantal in ITEMS:
             c.execute(text(
                 "INSERT INTO items (onze_naam, officiele_naam, code, set_code, "
-                "categorie, staat, grade, comp_prijs) "
-                "VALUES (:a,:b,:c,:d,:e,:f,:g,:h)"),
+                "categorie, staat, grade, comp_prijs, aantal) "
+                "VALUES (:a,:b,:c,:d,:e,:f,:g,:h,:i)"),
                 {"a": onze, "b": off, "c": code, "d": setc, "e": cat, "f": staat,
-                 "g": grade, "h": prijs})
-        for naam, code, cat, staat, grade, comp, cm in ALLEEN_CM:
+                 "g": grade, "h": prijs, "i": aantal})
+        for naam, code, cat, staat, grade, comp, cm, aantal in ALLEEN_CM:
             c.execute(text(
                 "INSERT INTO items (onze_naam, code, categorie, staat, grade, "
-                "comp_prijs, prijs_cm) VALUES (:a,:b,:c,:d,:e,:f,:g)"),
+                "comp_prijs, prijs_cm, aantal) VALUES (:a,:b,:c,:d,:e,:f,:g,:h)"),
                 {"a": naam, "b": code, "c": cat, "d": staat, "e": grade,
-                 "f": comp, "g": cm})
+                 "f": comp, "g": cm, "h": aantal})
     return engine
 
 
@@ -125,7 +129,7 @@ def rijen(engine):
     with engine.connect() as c:
         return c.execute(text(
             "SELECT id, event_id, item_id, datum, tijd, kanaal, type, bedrag, "
-            "afzender, flag, ruwe_tekst, code FROM transactions "
+            "afzender, flag, ruwe_tekst, code, stuks FROM transactions "
             "ORDER BY id")).mappings().all()
 
 
@@ -144,6 +148,123 @@ def kop(nummer: str, vraag: str, verwacht: str):
 def uitkomst(*regels):
     for i, regel in enumerate(regels):
         print(("   resultaat: " if i == 0 else "              ") + regel)
+
+
+def nieuwe_features(AppTest, db):
+    """Aantallen, voorraad-indicator en dubbel-check (features 1-3).
+
+    Draait op een eigen verse database: deze tests schrijven rijen weg, en de
+    rookproef hierboven rekent met vaste rijnummers."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("FEATURES 1-3 — aantallen, voorraad, dubbel-check")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    # --- aantallen: +/- , per stuk en totaal (feature 1) -------------------
+    at.text_input(key="zoekterm").set_value("charizard").run()
+    at.button(key=knoppen(at, "pick_")[0].key).click().run()
+    check(at.session_state["stuks"] == 1, "aantal begint op 1")
+    check(at.button(key="stuks_min").disabled,
+          "de min-knop staat uit op 1 — minder dan één verkoop bestaat niet")
+    check(not any(sc.key == "prijs_modus" for sc in at.segmented_control),
+          "per stuk/totaal blijft verborgen zolang het er één is")
+
+    at.button(key="stuks_plus").click().run()
+    at.button(key="stuks_plus").click().run()
+    check(at.session_state["stuks"] == 3, f"drie keer plus geeft 3 "
+                                          f"({at.session_state['stuks']})")
+    check(any(sc.key == "prijs_modus" for sc in at.segmented_control),
+          "vanaf 2 stuks verschijnt de keuze per stuk/totaal")
+    at.button(key="stuks_min").click().run()
+    check(at.session_state["stuks"] == 2, "min haalt er weer een af")
+    at.button(key="stuks_plus").click().run()
+
+    # per stuk: 3 × 15 = 45 het totaal in
+    at.number_input(key="bedrag").set_value(15.0).run()
+    tekst = " ".join(m.value for m in at.markdown)
+    check("3 × €15 = <b>€45</b>" in tekst or "3 × €15 = €45" in tekst.replace("<b>","").replace("</b>",""),
+          "rekenregel toont stuksprijs × aantal = totaal")
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    laatste = r[-1]
+    check(float(laatste["bedrag"]) == 45.0,
+          f"bedrag is het totaal, niet de stuksprijs ({float(laatste['bedrag'])})")
+    check(int(laatste["stuks"]) == 3, f"stuks = 3 in de database ({laatste['stuks']})")
+    uitkomst(toon(laatste) + f"  stuks={laatste['stuks']}")
+
+    # totaal: 2 stuks voor samen 70, dus niet 140
+    at.text_input(key="zoekterm").set_value("umbreon vmax").run()
+    at.button(key=knoppen(at, "pick_")[0].key).click().run()
+    at.button(key="stuks_plus").click().run()
+    at.segmented_control(key="prijs_modus").set_value("Totaal").run()
+    at.number_input(key="bedrag").set_value(700.0).run()
+    at.button(key="vastleggen").click().run()
+    r = rijen(engine)
+    laatste = r[-1]
+    check(float(laatste["bedrag"]) == 700.0,
+          f"in totaal-modus gaat het bedrag ongedeeld de database in "
+          f"({float(laatste['bedrag'])})")
+    check(int(laatste["stuks"]) == 2, f"stuks = 2 ({laatste['stuks']})")
+    check(at.session_state["stuks"] == 1, "aantal valt terug op 1 na vastleggen")
+    check(at.session_state["prijs_modus"] == "Per stuk",
+          "per stuk/totaal valt terug op 'Per stuk'")
+
+    # --- dubbel-waarschuwing (feature 3) -----------------------------------
+    at.text_input(key="zoekterm").set_value("umbreon v").run()
+    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
+    at.button(key=keuze[0].key).click().run()
+    at.number_input(key="bedrag").set_value(45.0).run()
+    at.button(key="vastleggen").click().run()
+    voor = len(rijen(engine))
+
+    # exact dezelfde kaart voor exact hetzelfde bedrag, direct erna
+    at.text_input(key="zoekterm").set_value("umbreon v").run()
+    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
+    at.button(key=keuze[0].key).click().run()
+    at.number_input(key="bedrag").set_value(45.0).run()
+    at.button(key="vastleggen").click().run()
+    check(len(rijen(engine)) == voor,
+          "tweede identieke invoer wordt nog NIET weggeschreven")
+    check(at.session_state["dubbel_vraag"] is not None, "de dubbel-vraag staat aan")
+    tekst = " ".join(m.value for m in at.markdown)
+    check("Net al ingevoerd" in tekst, f"inline waarschuwing zichtbaar")
+    check(at.button(key="vastleggen").disabled,
+          "VASTLEGGEN staat uit zolang de vraag openstaat")
+    # let op: 'tc-dubbel' staat óók in het <style>-blok, dus filteren op de
+    # gerenderde div en niet op de klassenaam alleen
+    banner = [m.value for m in at.markdown if 'class="tc-dubbel"' in m.value]
+    uitkomst(re.sub(r"<[^>]+>", "", banner[0]).strip() if banner else "(geen banner)")
+
+    # doorgaan mag: twee losse pakjes van hetzelfde soort is legitiem
+    at.button(key="dubbel_ja").click().run()
+    check(len(rijen(engine)) == voor + 1,
+          "na bevestigen wordt hij alsnog vastgelegd")
+    check(at.session_state["dubbel_vraag"] is None, "de vraag is opgeruimd")
+
+    # en afzien kan ook
+    at.text_input(key="zoekterm").set_value("umbreon v").run()
+    keuze = [b for b in knoppen(at, "pick_") if "189" in b.label]
+    at.button(key=keuze[0].key).click().run()
+    at.number_input(key="bedrag").set_value(45.0).run()
+    at.button(key="vastleggen").click().run()
+    at.button(key="dubbel_nee").click().run()
+    check(len(rijen(engine)) == voor + 1, "na 'nee' komt er niets bij")
+    check(at.session_state["dubbel_vraag"] is None, "de vraag is weg na 'nee'")
+
+    # een ander bedrag is geen dubbeling
+    at.number_input(key="bedrag").set_value(40.0).run()
+    at.button(key="vastleggen").click().run()
+    check(len(rijen(engine)) == voor + 2,
+          "ander bedrag gaat er zonder vraag doorheen")
 
 
 def scenarios(AppTest, db):
@@ -331,6 +452,29 @@ def main():
           f"staat/grade scheidt gelijknamige kaarten ({labels})")
     check(labels and "300.00" in labels[0],
           f"duurste variant staat bovenaan bij gelijke naam ({labels})")
+
+    # --- voorraad-indicator bij het zoekresultaat (feature 2) --------------
+    at.text_input(key="zoekterm").set_value("umbreon").run()
+    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    check(any("3 op voorraad" in lb for lb in labels),
+          f"voorraad staat bij het zoekresultaat ({labels})")
+    check(any("1 op voorraad" in lb for lb in labels),
+          f"laatste exemplaar toont '1 op voorraad' ({labels})")
+
+    at.text_input(key="zoekterm").set_value("pikachu promo").run()
+    labels = [b.label for b in at.button if b.key and b.key.startswith("pick_")]
+    check(labels and "UITVERKOCHT" in labels[0],
+          f"voorraad 0 toont UITVERKOCHT ({labels})")
+
+    # kiezen van een uitverkochte kaart mag, met een waarschuwing
+    at.button(key=knoppen(at, "pick_")[0].key).click().run()
+    tekst = " ".join(m.value for m in at.markdown)
+    check("UITVERKOCHT" in tekst, "gekozen kaart toont de voorraadstand")
+    check("vastleggen mag" in tekst.lower() or "klopt dan alleen niet" in tekst,
+          "uitverkocht blokkeert niet, maar waarschuwt wel")
+    check(not at.button(key="vastleggen").disabled,
+          "VASTLEGGEN blijft bruikbaar bij voorraad 0")
+    at.button(key="deselect").click().run()
 
     # --- slabs/sealed zonder comp_prijs: terugval op de cm-prijs -----------
     at.text_input(key="zoekterm").set_value("pika van gogh").run()
@@ -574,6 +718,7 @@ def main():
           f"tweede undo pakt de eigen vorige invoer (€275), niet die van de collega "
           f"({[float(x['bedrag']) for x in r]})")
 
+    nieuwe_features(AppTest, db)
     scenarios(AppTest, db)
 
     # --- schrijffout: invoer blijft behouden ------------------------------
