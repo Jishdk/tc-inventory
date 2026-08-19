@@ -157,10 +157,14 @@ BASIS_CSS = """
       line-height: 1.35; font-size: 1.05rem; font-weight: 600; margin: 0;}
   [class*="st-key-pick_"] button p span {font-size: .82rem; font-weight: 400;}
 
-  /* mandje: elke regel is een naamregel plus één bedieningsregel */
-  [class*="st-key-regel_"] div[data-testid="stVerticalBlock"] {gap: .3rem;}
-  [class*="st-key-regel_"] {border-bottom: 1px solid rgba(128,128,128,.16);
-      padding-bottom: .5rem;}
+  /* Mandje: elke regel is een naamregel plus één bedieningsregel. De witruimte
+     eromheen is bewust krap — hoe meer kaarten er in het mandje liggen, hoe
+     eerder VASTLEGGEN onder de vouw zakt. De knoppen zelf blijven op formaat:
+     een tap-target verkleinen om een scrollbalk te winnen is de verkeerde ruil. */
+  /* st-key-regel_ zit óp het verticale blok van de regel, niet eromheen — een
+     nakomeling-selector vindt hier dus niets, net als bij st-key-resultaten. */
+  div[class*="st-key-regel_"] {gap: .15rem;
+      border-bottom: 1px solid rgba(128,128,128,.16); padding-bottom: .2rem;}
   .tc-regelnaam {font-size: 1.05rem; font-weight: 600; line-height: 1.3;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
   .tc-regelnaam span {font-size: .82rem; font-weight: 400; opacity: .6;}
@@ -202,6 +206,8 @@ BASIS_CSS = """
   /* presets: klein grut onder het mandje, mag niet met VASTLEGGEN concurreren */
   [class*="st-key-preset_"] button, .st-key-onderhandeld button {
       min-height: 2.5rem; padding: 0 .3rem; font-size: .88rem; font-weight: 600;}
+  .st-key-onderhandeld button {font-size: .82rem;}
+  .st-key-onderhandeld button p {white-space: nowrap;}
 
   .st-key-prijs_modus div[data-testid="stSegmentedControl"] button,
   .st-key-prijs_modus div[data-testid="stButtonGroup"] button {
@@ -841,7 +847,11 @@ st.markdown(f"""<style>
       border-color: {VRIJ_KLEUR} !important; color: #fff !important;}}
   .st-key-modus button[aria-checked="true"],
   .st-key-prijs_modus button[aria-checked="true"],
-  .st-key-cash_richting button[aria-checked="true"] {{
+  .st-key-cash_richting button[aria-checked="true"],
+  /* De onderhandeld-vlag is een status, geen actie. Streamlit's primary-knop
+     pakt het TC-rood uit primaryColor, en rood betekent in deze app "let op" —
+     dat schreeuwt harder dan VASTLEGGEN. Zelfde rustige tint als de toggles. */
+  .st-key-onderhandeld button[data-testid="stBaseButton-primary"] {{
       border-color: {KLEUR} !important; color: {KLEUR} !important;
       background: {KLEUR}14 !important;}}
 </style>""", unsafe_allow_html=True)
@@ -1079,7 +1089,7 @@ TE_COMPEN = not TRADE and not TOTAALPRIJS and any(r["prijs"] for r in mandje)
 
 if TE_COMPEN:
     kol_comp, kol_min, kol_hand, kol_flag = st.columns(
-        [1, 1.2, 1.3, 1.6], vertical_alignment="center")
+        [0.85, 1, 1.25, 1.95], vertical_alignment="center")
     kol_comp.button("comp", key="preset_comp", width="stretch",
                     on_click=zet_prijzen, args=(1.0,),
                     help="alles terug op de comp-prijs")
