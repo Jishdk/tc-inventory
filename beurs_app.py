@@ -111,150 +111,265 @@ if not os.getenv("SUPABASE_DB_URL"):
 # modus — één <style>-element in plaats van twee losse (die ruimte innemen).
 
 BASIS_CSS = """
+  /* ---- huisstijl-tokens ------------------------------------------------
+     Dark-first, cinematisch, terughoudend. Alles hieronder rekent met deze
+     variabelen, dus een kleurwijziging is één regel.
+
+     Gold is bewust schaars: alleen graded/premium (de grade van een slab en de
+     flits na het vastleggen). Rood is de hoofdactie en verder niets — daardoor
+     is VASTLEGGEN het enige echt luide element op het scherm.
+
+     Geen display-font. Dit is een interne app op een druk scherm; de systeem-
+     UI-font leest onder tijdsdruk beter dan welke brand-letter ook. */
+  :root {
+      --page: #111318;
+      --card: #1A1D26;
+      --elev: #232733;
+      --line: #2E3340;
+      --text: #EDEFF4;
+      --muted: #828A9C;
+      /* Dezelfde rol als --muted, maar een tint lichter voor tekst op de
+         elevated surface. #828A9C haalt daar 4.30 tegen de 4.5 die WCAG AA
+         vraagt; op --page en --card haalt hij 4.84 en mag hij blijven. */
+      --muted-elev: #9AA2B4;
+      --red: #F20519;
+      --red-line: rgba(242, 5, 25, .45);
+      --gold: #F2CF63;
+      --gold-soft: rgba(242, 207, 99, .10);
+      --glow-red: 0 8px 26px -8px rgba(242, 5, 25, .70),
+                  0 0 0 1px rgba(242, 5, 25, .35);
+      --glow-gold: 0 8px 26px -10px rgba(242, 207, 99, .55),
+                   0 0 0 1px rgba(242, 207, 99, .30);
+      --r: 14px;
+      --r-sm: 10px;
+      /* cijfers tabulair: bedragen lijnen uit en verspringen niet tijdens tikken */
+      --cijfers: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono",
+                 Menlo, Consolas, monospace;
+  }
+
+  html, body, .stApp, [data-testid="stAppViewContainer"] {background: var(--page);}
+  .stApp, body {color: var(--text);}
+
   /* Streamlit-balk weg: scheelt ruis én schermruimte op een telefoon */
   header[data-testid="stHeader"] {display: none;}
-  .block-container {padding-top: 1.5rem; padding-bottom: 4rem; max-width: 34rem;}
-  div[data-testid="stVerticalBlock"] {gap: .9rem;}
+  .block-container {padding-top: 1.1rem; padding-bottom: 4rem; max-width: 34rem;}
+  div[data-testid="stVerticalBlock"] {gap: .75rem;}
 
-  /* knoppen: ruime tap-targets */
-  .stButton > button {min-height: 3.25rem; border-radius: .75rem;}
+  /* ---- knoppen: ruime tap-targets op card-surface ---------------------- */
+  .stButton > button {min-height: 3.25rem; border-radius: var(--r);
+      background: var(--card); border: 1px solid var(--line);
+      color: var(--text); font-weight: 600;}
+  .stButton > button:hover {border-color: var(--muted); color: var(--text);}
+  .stButton > button:disabled, .stButton > button:disabled:hover {
+      background: var(--card); border-color: var(--line); color: #4C5364;}
+
   /* Segmented control: Streamlit 1.60 zet er data-testid="stButtonGroup" op,
      oudere versies "stSegmentedControl". Beide noemen overleeft een upgrade in
      welke richting dan ook — het kost één selector. */
   div[data-testid="stSegmentedControl"] button,
   div[data-testid="stButtonGroup"] button {min-height: 3.25rem;
-      font-size: 1.05rem; font-weight: 600;}
+      font-size: 1.05rem; font-weight: 700; background: var(--card);
+      border: 1px solid var(--line); color: var(--muted);}
 
   /* Streamlit stapelt kolommen onder een telefoonbreedte; hier moeten ze juist
      náást elkaar blijven (de +/- stepper, ja/nee-vragen). */
   div[data-testid="stHorizontalBlock"] {flex-wrap: nowrap; gap: .5rem;}
   div[data-testid="stColumn"] {min-width: 0 !important;}
 
-  /* dagtotaal: één rustige regel, geen blok dat de invoer wegdrukt */
-  .tc-dag {background: rgba(128,128,128,.12); border-radius: .6rem;
-      padding: .45rem .7rem; margin-bottom: .1rem; text-align: center;
-      font-size: .92rem; opacity: .8; line-height: 1.4;}
-  .tc-dag b {font-weight: 700; opacity: 1;}
+  /* ---- invoervelden ---------------------------------------------------- */
+  .stTextInput input, .stNumberInput input {background: var(--card) !important;
+      color: var(--text) !important;}
+  [data-testid="stTextInputRootElement"],
+  [data-testid="stNumberInputContainer"] {background: var(--card);
+      border: 1px solid var(--line); border-radius: var(--r-sm);}
+  .stTextInput input::placeholder {color: var(--muted); opacity: 1;}
 
-  /* snelknoppen: compact, twee regels (naam + prijs), links uitgelijnd */
-  [class*="st-key-snel_"] button {min-height: 3.1rem; padding: .35rem .5rem;}
+  /* ---- dagtotaal: rustige balk op card-surface ------------------------- */
+  .tc-dag {background: var(--card); border: 1px solid var(--line);
+      border-radius: var(--r-sm); padding: .5rem .7rem; margin-bottom: .1rem;
+      text-align: center; font-size: .9rem; color: var(--muted);
+      line-height: 1.45;}
+  .tc-dag b {font-weight: 700; color: var(--text);
+      font-family: var(--cijfers); font-variant-numeric: tabular-nums;
+      letter-spacing: -.02em;}
+
+  /* ---- snelknoppen: kleine cards met het 4px-frame als accent ---------- */
+  [class*="st-key-snel_"] button {min-height: 3.4rem; padding: .35rem .5rem;
+      background: var(--card); border: 1px solid var(--line);
+      border-left: 4px solid var(--elev); border-radius: var(--r-sm);}
+  [class*="st-key-snel_"] button:hover {border-left-color: var(--red-line);}
   [class*="st-key-snel_"] button p {white-space: pre-line; margin: 0;
-      line-height: 1.25; font-size: .92rem; font-weight: 600;}
-  [class*="st-key-snel_"] button p span {font-size: .8rem; font-weight: 400;}
+      line-height: 1.3; font-size: .92rem; font-weight: 700; color: var(--text);}
+  /* !important omdat Streamlit :gray[] zelf op rgba(250,250,250,.6) zet en met
+     die specificiteit wint — die tint zakt op deze donkere card naar ruim onder
+     de leesbaarheidsdrempel. */
+  [class*="st-key-snel_"] button p span {font-size: .82rem; font-weight: 600;
+      color: var(--muted-elev) !important; font-family: var(--cijfers);
+      font-variant-numeric: tabular-nums;}
 
-  /* zoekbalk: prominent */
+  /* ---- zoekbalk: prominent -------------------------------------------- */
   .st-key-zoekterm input {font-size: 1.25rem !important;
       padding: .9rem .75rem !important;}
 
-  /* zoekresultaten: naam vet, daaronder klein set + staat + prijs.
+  /* ---- zoekresultaten: naam vet, daaronder klein set + staat + prijs ----
      st-key-resultaten zit óp het verticale blok, niet eromheen — een
      nakomeling-selector vindt hier dus niets. */
-  div.st-key-resultaten {gap: .45rem;}
-  [class*="st-key-pick_"] button {min-height: 3.5rem; padding: .6rem .9rem;}
+  div.st-key-resultaten {gap: .4rem;}
+  [class*="st-key-pick_"] button {min-height: 3.5rem; padding: .6rem .9rem;
+      background: var(--card); border: 1px solid var(--line);
+      border-left: 4px solid var(--elev); border-radius: var(--r-sm);}
+  [class*="st-key-pick_"] button:hover {border-left-color: var(--red-line);}
   [class*="st-key-pick_"] button > div {width: 100%; justify-content: flex-start;}
   [class*="st-key-pick_"] button p {
       white-space: pre-line; text-align: left;
-      line-height: 1.35; font-size: 1.05rem; font-weight: 600; margin: 0;}
-  [class*="st-key-pick_"] button p span {font-size: .82rem; font-weight: 400;}
+      line-height: 1.35; font-size: 1.05rem; font-weight: 600; margin: 0;
+      color: var(--text);}
+  [class*="st-key-pick_"] button p span {font-size: .82rem; font-weight: 400;
+      color: var(--muted) !important; font-variant-numeric: tabular-nums;}
 
-  /* Mandje: elke regel is een naamregel plus één bedieningsregel. De witruimte
-     eromheen is bewust krap — hoe meer kaarten er in het mandje liggen, hoe
-     eerder VASTLEGGEN onder de vouw zakt. De knoppen zelf blijven op formaat:
-     een tap-target verkleinen om een scrollbalk te winnen is de verkeerde ruil. */
-  /* st-key-regel_ zit óp het verticale blok van de regel, niet eromheen — een
-     nakomeling-selector vindt hier dus niets, net als bij st-key-resultaten. */
-  div[class*="st-key-regel_"] {gap: .15rem;
-      border-bottom: 1px solid rgba(128,128,128,.16); padding-bottom: .2rem;}
+  /* rekenregel onder het bedrag (3 x EUR 15 = EUR 45) */
+  .tc-comp {font-size: .9rem; color: var(--muted); margin: 0;
+      font-variant-numeric: tabular-nums;}
+
+  /* ---- mandje ----------------------------------------------------------
+     st-key-regel_ zit óp het verticale blok van de regel, niet eromheen. Het
+     4px-frame links is het card-accent uit de huisstijl. */
+  div[class*="st-key-regel_"] {gap: .15rem; background: var(--card);
+      border: 1px solid var(--line); border-left: 4px solid var(--elev);
+      border-radius: var(--r-sm); padding: .5rem .55rem .3rem;}
   .tc-regelnaam {font-size: 1.05rem; font-weight: 600; line-height: 1.3;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-  .tc-regelnaam span {font-size: .82rem; font-weight: 400; opacity: .6;}
+      color: var(--text); overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;}
+  .tc-regelnaam span {font-size: .82rem; font-weight: 400; color: var(--muted);}
+  /* Gold: alleen graded. Niet strooien — dit is het enige plekje waar een kaart
+     zichzelf als premium mag aankondigen. */
+  .tc-regelnaam span.tc-grade {color: var(--gold); font-weight: 700;}
   [class*="st-key-weg_"] button {min-height: 2.4rem; padding: 0;
-      color: #8a8f98; border-color: transparent; background: transparent;}
+      color: var(--muted); border-color: transparent; background: transparent;}
+  [class*="st-key-weg_"] button:hover {color: var(--text);
+      border-color: transparent; background: var(--elev);}
+
   /* stepper: klein en inline, zodat VASTLEGGEN op een telefoon boven de vouw
      blijft — een teller van drie grote blokken duwde 'm eruit */
   [class*="st-key-min_"] button, [class*="st-key-plus_"] button {
-      min-height: 2.6rem; padding: 0; font-size: 1.15rem; font-weight: 700;}
+      min-height: 2.6rem; padding: 0; font-size: 1.15rem; font-weight: 700;
+      background: var(--elev); border-color: var(--line);}
   .tc-stuks {text-align: center; font-size: 1.1rem; font-weight: 700;
-      line-height: 2.6rem;}
-  .tc-inbegrepen {font-size: .85rem; opacity: .5; text-align: right;
+      line-height: 2.6rem; color: var(--text); font-family: var(--cijfers);}
+  .tc-inbegrepen {font-size: .85rem; color: var(--muted); text-align: right;
       line-height: 2.6rem; padding-right: .5rem;}
-  .tc-teller {font-size: .9rem; font-weight: 600; opacity: .6;
-      margin: .2rem 0 -.35rem; letter-spacing: .02em;}
-  .tc-totaal {text-align: right; font-size: 1.05rem; margin: -.2rem 0 .2rem;}
-  .tc-totaal b {font-size: 1.35rem;}
+  .tc-teller {font-size: .78rem; font-weight: 700; color: var(--muted);
+      margin: .2rem 0 -.25rem; letter-spacing: .08em; text-transform: uppercase;}
+  .tc-totaal {text-align: right; font-size: 1rem; margin: -.2rem 0 .2rem;
+      color: var(--muted); font-variant-numeric: tabular-nums;}
+  .tc-totaal b {font-size: 1.4rem; color: var(--text);
+      font-family: var(--cijfers); letter-spacing: -.03em;}
 
-  /* Prijs per regel: het getal is het belangrijkste op het scherm.
-     De key heet regelprijs_ en niet prijs_, want Streamlit selecteert zijn
-     st-key-classes met [class*=…]: een key die het begin is van een andere key
-     pikt diens opmaak mee, en `prijs_1` sleepte zo de display:none hieronder
-     over `prijs_modus` heen — de prijskeuze was daardoor onzichtbaar. */
+  /* ---- bedragen: tabulair, het getal is het belangrijkste -------------- */
   [class*="st-key-regelprijs_"] input {font-size: 1.45rem !important;
-      font-weight: 700; text-align: right; padding: .35rem .6rem !important;}
+      font-weight: 700; text-align: right; padding: .35rem .6rem !important;
+      font-family: var(--cijfers); font-variant-numeric: tabular-nums;
+      letter-spacing: -.03em;}
   [class*="st-key-regelprijs_"] [data-testid="stNumberInputContainer"]::before,
-  .st-key-mandje_totaal [data-testid="stNumberInputContainer"]::before {
+  .st-key-mandje_totaal [data-testid="stNumberInputContainer"]::before,
+  .st-key-cash_bedrag [data-testid="stNumberInputContainer"]::before {
       content: "€"; align-self: center; padding-left: .7rem; font-weight: 700;
-      opacity: .45;}
+      color: var(--muted);}
   /* +/- steppers van de getalvelden: te smal om te raken op een telefoon */
   [class*="st-key-regelprijs_"] [data-testid="stNumberInputContainer"] button,
   .st-key-mandje_totaal [data-testid="stNumberInputContainer"] button,
   .st-key-cash_bedrag [data-testid="stNumberInputContainer"] button {
       display: none;}
-  .st-key-mandje_totaal input {font-size: 2rem !important; font-weight: 700;
-      text-align: right; padding: .6rem .75rem !important;}
-  .st-key-mandje_totaal [data-testid="stNumberInputContainer"]::before {
+  .st-key-mandje_totaal input, .st-key-cash_bedrag input {
+      font-size: 2rem !important; font-weight: 700; text-align: right;
+      padding: .6rem .75rem !important; font-family: var(--cijfers);
+      font-variant-numeric: tabular-nums; letter-spacing: -.03em;}
+  .st-key-mandje_totaal [data-testid="stNumberInputContainer"]::before,
+  .st-key-cash_bedrag [data-testid="stNumberInputContainer"]::before {
       font-size: 1.6rem;}
+
   /* presets: klein grut onder het mandje, mag niet met VASTLEGGEN concurreren */
   [class*="st-key-preset_"] button, .st-key-onderhandeld button {
-      min-height: 2.5rem; padding: 0 .3rem; font-size: .88rem; font-weight: 600;}
+      min-height: 2.5rem; padding: 0 .3rem; font-size: .88rem; font-weight: 600;
+      background: var(--elev); border-color: var(--line);
+      color: var(--muted-elev); border-radius: var(--r-sm);}
+  [class*="st-key-preset_"] button p, .st-key-onderhandeld button p {
+      color: var(--muted-elev) !important;}
+  [class*="st-key-preset_"] button:hover, .st-key-onderhandeld button:hover {
+      color: var(--text);}
   .st-key-onderhandeld button {font-size: .82rem;}
   .st-key-onderhandeld button p {white-space: nowrap;}
 
   .st-key-prijs_modus div[data-testid="stSegmentedControl"] button,
   .st-key-prijs_modus div[data-testid="stButtonGroup"] button {
-      min-height: 2.4rem; font-size: .92rem; font-weight: 500;}
+      min-height: 2.4rem; font-size: .92rem; font-weight: 600;}
 
   /* trade: de twee cash-richtingen lezen als knoppen, niet als een instelling */
   .st-key-cash_richting div[data-testid="stSegmentedControl"] button,
   .st-key-cash_richting div[data-testid="stButtonGroup"] button {
       min-height: 3rem; font-size: .95rem; font-weight: 700;}
-  .st-key-cash_bedrag input {font-size: 2rem !important; font-weight: 700;
-      text-align: right; padding: .6rem .75rem !important;}
-  .st-key-cash_bedrag [data-testid="stNumberInputContainer"]::before {
-      content: "€"; align-self: center; padding-left: .8rem; font-weight: 700;
-      opacity: .45; font-size: 1.6rem;}
 
-  /* VASTLEGGEN: grote knop onderaan */
+  /* ---- VASTLEGGEN: de enige echt luide knop op het scherm -------------- */
   .st-key-vastleggen button {
-      min-height: 4rem; font-size: 1.2rem; font-weight: 700; letter-spacing: .03em;}
+      min-height: 4rem; font-size: 1.2rem; font-weight: 800; letter-spacing: .06em;
+      border-radius: var(--r);}
+  /* Streamlit zet de <p> in een knop zelf op 14px/400; zonder deze regel is de
+     hoofdknop optisch even zwaar als de rest, en telt wit-op-rood bovendien als
+     kleine tekst waar WCAG een hogere contrasteis aan stelt. */
+  .st-key-vastleggen button p {font-size: 1.2rem !important; font-weight: 800;
+      letter-spacing: .06em;}
 
-  /* bevestiging: groot, kort, vervaagt vanzelf — en klapt daarna dicht, zodat
-     er geen gat achterblijft midden op het invoerscherm */
+  /* ---- bevestiging: licht kort op met een gouden gloed, vervaagt dan ----
+     en klapt daarna dicht, zodat er geen gat achterblijft midden op het scherm */
   @keyframes tc-fade {
-      0%, 65% {opacity: 1;}
+      0% {box-shadow: var(--glow-gold);}
+      14%, 65% {opacity: 1; box-shadow: none;}
       99% {opacity: 0; padding: .9rem 1rem; max-height: 8rem;}
       100% {opacity: 0; visibility: hidden; max-height: 0; padding: 0;
             margin: 0; border-width: 0;}}
-  .tc-ok {animation: tc-fade 6s ease-in forwards; background: rgba(33,195,84,.14);
-      border-left: .35rem solid rgb(33,195,84); border-radius: .6rem;
-      padding: .9rem 1rem; font-size: 1.25rem; font-weight: 700; line-height: 1.3;
-      margin-bottom: .5rem; overflow: hidden;}
+  .tc-ok {animation: tc-fade 6s ease-in forwards; background: var(--gold-soft);
+      border: 1px solid rgba(242, 207, 99, .30);
+      border-left: 4px solid var(--gold); border-radius: var(--r-sm);
+      padding: .85rem 1rem; font-size: 1.1rem; font-weight: 700; line-height: 1.35;
+      margin-bottom: .5rem; overflow: hidden; color: var(--text);}
 
-  /* terzijdes (geen beursdag): mag je gerust over het hoofd zien */
-  .tc-note {font-size: .72rem; opacity: .4; text-align: center; margin: -.4rem 0 0;}
+  /* ---- voorraad -------------------------------------------------------- */
+  .tc-voorraad, .tc-laatste, .tc-op {font-size: .85rem; font-weight: 600;
+      margin: .1rem 0;}
+  /* "op voorraad" rustig, de laatste helderder, uitverkocht rood. Bewust géén
+     goud voor de laatste: dat is een voorraadstand, geen premium-kaart. */
+  .tc-voorraad {color: var(--muted);}
+  .tc-laatste  {color: var(--text);}
+  .tc-op       {color: #FF5A66;}
+
+  /* dubbel-waarschuwing: opvalt, maar blokkeert niet */
+  .tc-dubbel {background: var(--elev); border-left: 4px solid var(--red-line);
+      border-radius: var(--r-sm); padding: .55rem .7rem; font-size: .9rem;
+      margin: .4rem 0; color: var(--text);}
+  .tc-inbegrepen {color: var(--muted-elev);}
+
+  /* terzijdes (geen beursdag, snelknop zonder kaart): mag je over het hoofd zien */
+  .tc-note {font-size: .74rem; color: var(--muted); opacity: .85;
+      text-align: center; margin: -.2rem 0 0;}
 
   /* vangnet: lichte rand, het is een uitwijk en geen hoofdroute */
-  [data-testid="stExpander"] details {border-color: rgba(128,128,128,.22);}
-  [data-testid="stExpander"] summary {font-size: .9rem; opacity: .75;}
+  [data-testid="stExpander"] details {border-color: var(--line);
+      background: var(--card); border-radius: var(--r-sm);}
+  [data-testid="stExpander"] summary {font-size: .9rem; color: var(--muted);}
 
   /* laatste invoeren: compacte regels in plaats van een tabel */
-  .tc-log {font-size: .85rem; opacity: .7; line-height: 1.9;}
-  .tc-log b {font-weight: 600;}
+  .tc-log {font-size: .85rem; color: var(--muted); line-height: 1.95;
+      font-variant-numeric: tabular-nums;}
+  .tc-log b {font-weight: 700; color: var(--text); font-family: var(--cijfers);}
   .st-key-undo button, .st-key-undo_ja button, .st-key-undo_nee button {
       min-height: 2.6rem; font-size: .9rem;}
 
   /* nog een: duidelijk aanwezig, maar niet in de weg van VASTLEGGEN */
   .st-key-nogmaals_knop button {min-height: 2.9rem; font-size: 1rem;
-      font-weight: 600; margin-top: -.3rem;}
+      font-weight: 600; margin-top: -.3rem; border-color: var(--red-line);}
+
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+      color: var(--muted);}
 """
 
 # ------------------------------------------------------------------ database
@@ -560,9 +675,15 @@ def verdeel(gewichten: list[float], totaal: float) -> list[float]:
 
 
 def geld(bedrag: float) -> str:
-    """Hele euro's kort, centen alleen als ze er zijn: 430 → '430', 8,75 → '8.75'."""
-    b = float(bedrag)
-    return f"{b:,.0f}" if b == int(b) else f"{b:,.2f}"
+    """Bedrag in nl-NL-notatie: punt voor duizendtallen, komma voor centen.
+
+    Altijd twee decimalen. Geld met wisselend aantal decimalen leest onrustig in
+    een kolom, en de cijfers staan op het scherm in een tabulair font waar juist
+    díe uitlijning het werk doet: 1.215,00 onder 12,00.
+
+    Python kent alleen de Amerikaanse vorm, dus we wisselen de scheidingstekens
+    om via een tussenteken — anders vervangt de tweede replace ook de eerste."""
+    return f"{float(bedrag):,.2f}".replace(",", "~").replace(".", ",").replace("~", ".")
 
 
 def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
@@ -573,7 +694,7 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
         for _, r in treffers.head(MAX_RESULTATEN).iterrows():
             # "cm" erachter als het geen comp-prijs is: anders lijkt een
             # Cardmarket-prijs op een afgesproken verkoopprijs.
-            prijs = (f"€{r['prijs']:,.2f}" + (" cm" if r["prijs_bron"] == "cm" else "")
+            prijs = (f"€ {geld(r['prijs'])}" + (" cm" if r["prijs_bron"] == "cm" else "")
                      if pd.notna(r["prijs"]) else "€ ?")
             # Voorraad achteraan: zo zie je vóór het tikken of dit de laatste is.
             detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs,
@@ -611,7 +732,8 @@ def zoek_snelknoppen(df: pd.DataFrame) -> tuple[list, list]:
 
 def als_dict(r) -> dict:
     return {"id": int(r["id"]), "naam": r["naam"], "kenmerk": kenmerk(r),
-            "conditie": conditie(r), "aantal": int(r["aantal"]),
+            "conditie": conditie(r), "staat": r["staat"], "grade": r["grade"],
+            "aantal": int(r["aantal"]),
             "prijs": None if pd.isna(r["prijs"]) else float(r["prijs"]),
             "prijs_bron": r["prijs_bron"]}
 
@@ -681,8 +803,8 @@ def vergeet_regel(rid: int):
         st.session_state.pop(sleutel, None)
 
 
-def voeg_toe(*, item_id, naam, kenmerk="", conditie="", voorraad=0, prijs=None,
-             prijs_bron=None, code=None):
+def voeg_toe(*, item_id, naam, kenmerk="", conditie="", staat=None, grade=None,
+             voorraad=0, prijs=None, prijs_bron=None, code=None):
     """Zet een kaart in het mandje. Eén tik op een zoekresultaat is genoeg — de
     kaart staat er meteen in met zijn eigen prijs erbij. Dat houdt de losse
     verkoop precies even kort als voorheen: zoeken, tikken, vastleggen."""
@@ -695,7 +817,8 @@ def voeg_toe(*, item_id, naam, kenmerk="", conditie="", voorraad=0, prijs=None,
     # regels eronder komen dan niet meer aan bod. Vandaar `value=` bij het veld.
     st.session_state["mandje"].append({
         "rid": rid, "id": item_id, "naam": naam, "kenmerk": kenmerk,
-        "conditie": conditie, "voorraad": int(voorraad), "prijs": prijs,
+        "conditie": conditie, "staat": staat, "grade": grade,
+        "voorraad": int(voorraad), "prijs": prijs,
         "prijs_bron": prijs_bron, "code": code,
         "bedrag": float(prijs) if prijs else 0.0,
     })
@@ -786,7 +909,7 @@ def mandje_totaal() -> float:
 
 def na_succes(naam: str, bedrag: float, tx_ids: list[int] | None = None,
               herhaal: list[dict] | None = None):
-    st.session_state["bevestiging"] = f"✓ Vastgelegd — {naam} · €{bedrag:,.2f}"
+    st.session_state["bevestiging"] = f"✓ Vastgelegd — {naam} · € {geld(bedrag)}"
     # Wat er net wegging, om het met één tik nog eens te kunnen doen. Vijf keer
     # hetzelfde pakje aan vijf klanten is op een beurs eerder regel dan
     # uitzondering, en dan is opnieuw zoeken puur tikwerk.
@@ -811,49 +934,38 @@ def meld_fout(melding: str, detail: str):
 init_state()
 
 # ------------------------------------------------------------------ stijl
-# Kleur per modus. Eén blik op de knop is genoeg om te zien wát je aan het boeken
-# bent. De modus staat al in session_state vóór het script draait, dus dit kan in
-# hetzelfde <style>-blok als de basis-CSS — één element, geen extra witruimte.
-
-# Blauw voor trade, niet het TC-rood: rood staat in deze app al voor "let op"
-# (uitverkocht, foutmelding) en een rode VASTLEGGEN-knop leest als een waarschuwing.
-MODUS_KLEUR = {"VERKOOP": "#1B9E4B", "TRADE": "#2F6FED"}
-_modus = st.session_state.get("modus") or "VERKOOP"
-KLEUR = VRIJ_KLEUR = MODUS_KLEUR[_modus]
-
-EXTRA_CSS = """
-  /* voorraad bij de gekozen kaart */
-  .tc-voorraad, .tc-laatste, .tc-op {font-size:.85rem; font-weight:600;
-      margin:-.3rem 0 .5rem;}
-  .tc-voorraad {color:#5b6472;}
-  .tc-laatste  {color:#B26A00;}
-  .tc-op       {color:#C0261A;}
-  /* aantal-teller tussen de +/- knoppen */
-  .tc-stuks {text-align:center; font-size:1.5rem; font-weight:700; line-height:2.4rem;}
-  /* dubbel-waarschuwing: opvalt, maar blokkeert niet */
-  .tc-dubbel {background:#FFF6E0; border-left:4px solid #E8A200; border-radius:6px;
-      padding:.55rem .7rem; font-size:.9rem; margin:.4rem 0;}
-"""
+# De hoofdactie is rood en verder is er niets roods op het scherm: daardoor is
+# VASTLEGGEN het enige element dat om aandacht vraagt. De modus zie je aan de
+# toggle bovenin, niet meer aan de kleur van de knop — een blauwe of groene
+# hoofdknop zou de rode hiërarchie uit de huisstijl doorbreken.
+#
+# De actieve keuze in een toggle is gevuld en licht; welke modus je hebt zie je
+# aan wélke knop oplicht, niet aan een kleur. Goud blijft daarmee gereserveerd
+# voor waar het iets betekent: de grade van een slab en de flits na het
+# vastleggen. Een derde accentkleur zou dat verwateren.
 
 st.markdown(f"""<style>
 {BASIS_CSS}
-{EXTRA_CSS}
-  /* :not(:disabled) — een uitgeschakelde knop moet grijs blijven, anders lijkt
-     'ie klaar voor gebruik terwijl er nog geen kaart gekozen is. */
+  /* :not(:disabled) — een uitgeschakelde knop moet dof blijven, anders lijkt
+     'ie klaar voor gebruik terwijl er nog geen kaart in het mandje ligt. */
   .st-key-vastleggen button:not(:disabled) {{
-      background: {KLEUR} !important; border-color: {KLEUR} !important;
-      color: #fff !important;}}
-  .st-key-vrij_knop button:not(:disabled) {{background: {VRIJ_KLEUR} !important;
-      border-color: {VRIJ_KLEUR} !important; color: #fff !important;}}
+      background: var(--red) !important; border-color: var(--red) !important;
+      color: #fff !important; box-shadow: var(--glow-red);}}
+  .st-key-vastleggen button:not(:disabled):hover {{
+      background: #FF1F31 !important; border-color: #FF1F31 !important;}}
+
+  /* actieve keuze in een toggle: gevuld, licht, met het modus-accent als lijn */
   .st-key-modus button[aria-checked="true"],
   .st-key-prijs_modus button[aria-checked="true"],
-  .st-key-cash_richting button[aria-checked="true"],
-  /* De onderhandeld-vlag is een status, geen actie. Streamlit's primary-knop
-     pakt het TC-rood uit primaryColor, en rood betekent in deze app "let op" —
-     dat schreeuwt harder dan VASTLEGGEN. Zelfde rustige tint als de toggles. */
+  .st-key-cash_richting button[aria-checked="true"] {{
+      background: var(--elev) !important; color: var(--text) !important;
+      border-color: var(--text) !important;}}
+
+  /* De onderhandeld-vlag is een status, geen actie: een rode tint in plaats van
+     de volle primary-kleur, zodat hij niet met VASTLEGGEN concurreert. */
   .st-key-onderhandeld button[data-testid="stBaseButton-primary"] {{
-      border-color: {KLEUR} !important; color: {KLEUR} !important;
-      background: {KLEUR}14 !important;}}
+      background: rgba(242, 5, 25, .14) !important;
+      border-color: var(--red-line) !important; color: #FF8A93 !important;}}
 </style>""", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ pincode
@@ -886,15 +998,15 @@ if totalen is not None:
     trades = totalen.get("trade", {})
     n_trades, cash = trades.get("groepen", 0), trades.get("som", 0.0)
     cash_teken = "−" if cash < 0 else "+"
-    regel = (f'Vandaag: verkoop <b>€{geld(verkoop)}</b> &nbsp;·&nbsp; '
+    regel = (f'Vandaag: verkoop <b>€ {geld(verkoop)}</b> &nbsp;·&nbsp; '
              f'trades: <b>{n_trades}</b>')
     if n_trades:
-        regel += f' (cash {cash_teken}€{geld(abs(cash))})'
+        regel += f' (cash {cash_teken}€ {geld(abs(cash))})'
     # Inkoop kan de app niet meer boeken; wat er uit een oudere versie of uit de
     # WhatsApp-import staat, laten we wél zien — anders lijkt de dag onvolledig.
     inkoop = totalen.get("inkoop", {}).get("som", 0.0)
     if inkoop:
-        regel += f' &nbsp;·&nbsp; inkoop <b>€{geld(inkoop)}</b>'
+        regel += f' &nbsp;·&nbsp; inkoop <b>€ {geld(inkoop)}</b>'
     st.markdown(f'<div class="tc-dag">{regel}</div>', unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ modus
@@ -928,6 +1040,7 @@ if _nogmaals and not st.session_state["mandje"]:
         for regel in _nogmaals:
             voeg_toe(item_id=regel["id"], naam=regel["naam"],
                      kenmerk=regel["kenmerk"], conditie=regel["conditie"],
+                     staat=regel.get("staat"), grade=regel.get("grade"),
                      voorraad=regel["voorraad"], prijs=regel["prijs"],
                      prijs_bron=regel["prijs_bron"], code=regel["code"])
             # De prijs van zojuist, niet de comp: dat is de gangbare prijs
@@ -983,12 +1096,13 @@ for begin in range(0, len(snel_gevonden), SNELKNOPPEN_PER_RIJ):
     kolommen = st.columns(SNELKNOPPEN_PER_RIJ, vertical_alignment="center")
     for kolom, (conf, item) in zip(kolommen, rij):
         # Prijs op de knop: dan weet je vóór het tikken of hij nog goed staat.
-        prijs = f"€{geld(item['prijs'])}" if item["prijs"] else "€ ?"
+        prijs = f"€ {geld(item['prijs'])}" if item["prijs"] else "€ ?"
         with kolom:
             if st.button(f"{conf['knop']}\n:gray[{prijs}]", key=f"snel_{item['id']}",
                          width="stretch"):
                 voeg_toe(item_id=item["id"], naam=item["naam"],
                          kenmerk=item["kenmerk"], conditie=item["conditie"],
+                         staat=item["staat"], grade=item["grade"],
                          voorraad=item["aantal"], prijs=item["prijs"],
                          prijs_bron=item["prijs_bron"], code=item["kenmerk"])
                 st.rerun()
@@ -1009,7 +1123,8 @@ if len(term.strip()) >= 2:
     if gekozen is not None:
         r = als_dict(gekozen)
         voeg_toe(item_id=r["id"], naam=r["naam"], kenmerk=r["kenmerk"],
-                 conditie=r["conditie"], voorraad=r["aantal"], prijs=r["prijs"],
+                 conditie=r["conditie"], staat=r["staat"], grade=r["grade"],
+                 voorraad=r["aantal"], prijs=r["prijs"],
                  prijs_bron=r["prijs_bron"], code=r["kenmerk"])
         st.rerun()
 
@@ -1031,11 +1146,18 @@ for regel in mandje:
         # als kleine stepper náást de prijs, zodat een mandje van twee kaarten
         # nog steeds boven de vouw past op een telefoon.
         kol_naam, kol_weg = st.columns([6, 1], vertical_alignment="center")
-        detail = " · ".join(x for x in [regel["kenmerk"], regel["conditie"]] if x)
-        kol_naam.markdown(
-            f'<div class="tc-regelnaam">{html.escape(regel["naam"])}'
-            + (f'<span> · {html.escape(detail)}</span>' if detail else "")
-            + "</div>", unsafe_allow_html=True)
+        # Set-code en staat gedempt; de grade van een slab in goud. Dat is het
+        # enige plekje waar de huisstijl-goudkleur mag opduiken — een PSA 10 is
+        # nu eenmaal iets anders dan een losse NM-kaart, en die ene accentkleur
+        # zegt dat sneller dan tekst.
+        detail = " · ".join(x for x in [regel["kenmerk"], regel.get("staat")] if x)
+        kop_html = f'<div class="tc-regelnaam">{html.escape(regel["naam"])}'
+        if detail:
+            kop_html += f'<span> · {html.escape(detail)}</span>'
+        if regel.get("grade"):
+            kop_html += (f'<span class="tc-grade"> · '
+                         f'{html.escape(str(regel["grade"]))}</span>')
+        kol_naam.markdown(kop_html + "</div>", unsafe_allow_html=True)
         kol_weg.button("✕", key=f"weg_{rid}", width="stretch",
                        on_click=haal_weg, args=(rid,), help="uit het mandje halen")
 
@@ -1145,11 +1267,11 @@ STUKS_TOTAAL = sum(regel_stuks(r["rid"]) for r in mandje)
 if TRADE and mandje:
     teken = "−" if CASH < 0 else "+"
     st.markdown(f'<div class="tc-totaal">{STUKS_TOTAAL} kaarten eruit '
-                f'&nbsp;·&nbsp; cash <b>{teken}€{geld(abs(CASH))}</b></div>',
+                f'&nbsp;·&nbsp; cash <b>{teken}€ {geld(abs(CASH))}</b></div>',
                 unsafe_allow_html=True)
 elif len(mandje) > 1 and TOTAAL > 0:
     st.markdown(f'<div class="tc-totaal">{STUKS_TOTAAL} kaarten &nbsp;·&nbsp; '
-                f'totaal <b>€{geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
+                f'totaal <b>€ {geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
 
 # --- dubbel-waarschuwing ---------------------------------------------------
 # Alleen bij één verkochte kaart: daar zit de dubbele tik, en daar is een
@@ -1158,7 +1280,7 @@ elif len(mandje) > 1 and TOTAAL > 0:
 vraag = st.session_state.get("dubbel_vraag")
 if vraag:
     st.markdown(f'<div class="tc-dubbel">Net al ingevoerd: {vraag["naam"]} '
-                f'€{geld(vraag["bedrag"])} om {vraag["tijd"]} '
+                f'€ {geld(vraag["bedrag"])} om {vraag["tijd"]} '
                 f'({vraag["seconden"]} s geleden) — toch vastleggen?</div>',
                 unsafe_allow_html=True)
     kol_ja, kol_nee = st.columns(2)
@@ -1245,7 +1367,8 @@ if (klik or bevestigd) and mandje:
             # dan toch bij getypt te worden.
             herhaal = None if TRADE else [
                 {"id": r["id"], "naam": r["naam"], "kenmerk": r["kenmerk"],
-                 "conditie": r["conditie"], "voorraad": r["voorraad"],
+                 "conditie": r["conditie"], "staat": r.get("staat"),
+                 "grade": r.get("grade"), "voorraad": r["voorraad"],
                  "prijs": r["prijs"], "prijs_bron": r["prijs_bron"],
                  "code": r["code"], "bedrag": float(r["bedrag"])}
                 for r in mandje]
@@ -1289,7 +1412,7 @@ if mijn:
     laatste = mijn[-1]
     if st.session_state["undo_vraag"]:
         st.warning(f"Laatste invoer verwijderen: {laatste['naam']} "
-                   f"€{geld(laatste['bedrag'])}?", icon="↩️")
+                   f"€ {geld(laatste['bedrag'])}?", icon="↩️")
         kol_ja, kol_nee = st.columns(2)
         if kol_ja.button("Ja, verwijderen", key="undo_ja", type="primary",
                          width="stretch"):
@@ -1299,7 +1422,7 @@ if mijn:
                 st.session_state["undo_vraag"] = False
                 st.session_state["tx_versie"] += 1
                 st.session_state["bevestiging"] = (
-                    f"↩ Verwijderd: {laatste['naam']} — €{laatste['bedrag']:,.2f}"
+                    f"↩ Verwijderd: {laatste['naam']} — € {geld(laatste['bedrag'])}"
                     if weg else f"↩ {laatste['naam']} stond er al niet meer in.")
                 # Wat je net hebt teruggedraaid wil je niet met één tik terug.
                 st.session_state["nogmaals"] = None
@@ -1317,7 +1440,7 @@ if mijn:
         if kol_nee.button("Nee, laten staan", key="undo_nee", width="stretch"):
             st.session_state["undo_vraag"] = False
             st.rerun()
-    elif st.button(f"↩ Laatste invoer terugdraaien — €{geld(laatste['bedrag'])}"
+    elif st.button(f"↩ Laatste invoer terugdraaien — € {geld(laatste['bedrag'])}"
                    + (f" ({len(laatste['ids'])} regels)"
                       if len(laatste["ids"]) > 1 else ""),
                    key="undo", width="stretch"):
@@ -1341,7 +1464,7 @@ if recent is not None and not recent.empty:
         # Ruilpijl vóór de tekst: in een lijst met verkopen wil je een trade
         # kunnen herkennen zonder de bedragen te hoeven lezen.
         merk = "⇄ " if str(r["type"]) == "trade" else ""
-        regels.append(f'{str(r["tijd"])[:5]} &nbsp; <b>{teken}€{geld(bedrag)}</b> '
+        regels.append(f'{str(r["tijd"])[:5]} &nbsp; <b>{teken}€ {geld(bedrag)}</b> '
                       f'&nbsp; {merk}{html.escape(str(r["ruwe_tekst"])[:38])}')
     st.markdown(f'<div class="tc-log">{"<br>".join(regels)}</div>',
                 unsafe_allow_html=True)

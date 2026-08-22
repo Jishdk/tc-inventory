@@ -100,7 +100,7 @@ def check(voorwaarde, omschrijving):
 
 
 def dagtotaal(at) -> str:
-    """De balk bovenaan als platte tekst: 'Vandaag: verkoop €430 · trades: 0'."""
+    """De balk bovenaan als platte tekst: 'Vandaag: verkoop € 430,00 · trades: 0'."""
     balk = [m.value for m in at.markdown if 'class="tc-dag"' in m.value]
     if not balk:
         return ""
@@ -268,13 +268,13 @@ def mandje_tests(AppTest, db):
           "de prijskeuze staat op 'Per kaart' — en dat is op het scherm ook te zien")
     check("2 KAARTEN" in at.button(key="vastleggen").label,
           f"knop noemt het aantal ({at.button(key='vastleggen').label})")
-    check(any("totaal <b>€570</b>" in m.value for m in at.markdown),
+    check(any("totaal <b>€ 570,00</b>" in m.value for m in at.markdown),
           "lopend totaal onderaan: 450 + 120 = 570")
 
     # aantal op de tweede regel omhoog, prijs van de eerste omlaag
     at.button(key=knoppen(at, "plus_")[1].key).click().run()
     zet_prijs(at, 0, 400.0)
-    check(any("totaal <b>€640</b>" in m.value for m in at.markdown),
+    check(any("totaal <b>€ 640,00</b>" in m.value for m in at.markdown),
           "400 + 2 × 120 = 640")
 
     botsingen = css_botsingen(at)
@@ -563,7 +563,7 @@ def trade_tests(AppTest, db):
 
     at.number_input(key="cash_bedrag").set_value(75.0).run()
     at.text_input(key="binnen_notitie").set_value("5 kaarten, zie WA-foto").run()
-    check(any("cash <b>+€75</b>" in m.value for m in at.markdown),
+    check(any("cash <b>+€ 75,00</b>" in m.value for m in at.markdown),
           "de balk toont de richting van het geld")
     check("TRADE" in at.button(key="vastleggen").label,
           f"knop noemt de trade ({at.button(key='vastleggen').label})")
@@ -591,7 +591,7 @@ def trade_tests(AppTest, db):
     kies(at, "umbreon v", "189")
     at.segmented_control(key="cash_richting").set_value("WIJ LEGGEN BIJ €").run()
     at.number_input(key="cash_bedrag").set_value(40.0).run()
-    check(any("cash <b>−€40</b>" in m.value for m in at.markdown),
+    check(any("cash <b>−€ 40,00</b>" in m.value for m in at.markdown),
           "bijleggen leest als een min op het scherm")
     at.button(key="vastleggen").click().run()
     cash = rijen(engine)[-1]
@@ -620,7 +620,7 @@ def trade_tests(AppTest, db):
     at.button(key=knoppen(at, "weg_")[0].key).click().run()
 
     # --- dagtotaal: trades tellen als afspraken, niet als euro's ----------
-    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 3 (cash +€35)",
+    check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 3 (cash +€ 35,00)",
           f"drie trades, netto €75 − €40 + €0 = €35 ({dagtotaal(at)!r})")
     uitkomst(f"dagtotaal: {dagtotaal(at)}")
 
@@ -632,7 +632,7 @@ def trade_tests(AppTest, db):
     at.button(key="undo_ja").click().run()
     r = rijen(engine)
     check(len(r) == 5, f"de laatste trade is in zijn geheel weg (kreeg {len(r)})")
-    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 2 (cash +€35)",
+    check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 2 (cash +€ 35,00)",
           f"dagtotaal telt nog twee trades ({dagtotaal(at)!r})")
     uitkomst(f"rijen na undo: {[(x['type'], float(x['bedrag'])) for x in r]}")
 
@@ -641,7 +641,7 @@ def trade_tests(AppTest, db):
     kies(at, "umbreon vmax")
     zet_prijs(at, 0, 100.0)
     at.button(key="vastleggen").click().run()
-    check(dagtotaal(at) == "Vandaag: verkoop €100 · trades: 2 (cash +€35)",
+    check(dagtotaal(at) == "Vandaag: verkoop € 100,00 · trades: 2 (cash +€ 35,00)",
           f"de verkoop staat los van de trades ({dagtotaal(at)!r})")
     uitkomst(f"dagtotaal: {dagtotaal(at)}")
     print()
@@ -674,7 +674,8 @@ def snelknoppen_tests(AppTest, db):
     tekst = " ".join(m.value for m in at.markdown)
     check("Snelknop zonder eenduidige kaart: Twilight (0 treffers)" in tekst,
           "en wordt wél gemeld, zodat een verouderde lijst opvalt")
-    check(any("€15" in lb for lb in labels) and any("€120" in lb for lb in labels),
+    check(any("€ 15,00" in lb for lb in labels)
+          and any("€ 120,00" in lb for lb in labels),
           f"de prijs staat op de knop ({labels})")
     uitkomst(*[lb.replace("\n", "  ") for lb in labels])
 
@@ -860,7 +861,7 @@ def nogmaals_tests(AppTest, db):
     zet_prijs(at, 0, 12.0)          # afgedongen van €15
     at.button(key="vastleggen").click().run()
     check(at.session_state["bevestiging"] ==
-          "✓ Vastgelegd — Prismatic booster · €12.00",
+          "✓ Vastgelegd — Prismatic booster · € 12,00",
           f"bevestiging: {at.session_state['bevestiging']}")
     check(bool(at.button(key="nogmaals_knop")), "de nog-een-knop staat er na de invoer")
     check("Prismatic booster" in at.button(key="nogmaals_knop").label,
@@ -1000,7 +1001,7 @@ def scenarios(AppTest, db):
         "eigen invoer telt direct mee; collega boekt ná mij; undo pakt míjn "
         "hele mandje van €600 en laat hun €50 staan")
     voor_collega = dagtotaal(at)
-    check(voor_collega == "Vandaag: verkoop €1,215 · trades: 0",
+    check(voor_collega == "Vandaag: verkoop € 1.215,00 · trades: 0",
           f"scenario 4: eigen invoer telt direct mee ({voor_collega!r})")
 
     at2 = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
@@ -1030,7 +1031,7 @@ def scenarios(AppTest, db):
     check(len(r) == 4 and 50.0 in bedragen,
           f"scenario 4: beide regels van €600 weg, €50 van de collega blijft "
           f"({bedragen})")
-    check(dagtotaal(at) == "Vandaag: verkoop €665 · trades: 0",
+    check(dagtotaal(at) == "Vandaag: verkoop € 665,00 · trades: 0",
           f"scenario 4: dagtotaal loopt terug ({dagtotaal(at)!r})")
     uitkomst(f"bevestiging             : {at.session_state['bevestiging']}",
              f"rijen na undo           : {bedragen}",
@@ -1062,7 +1063,7 @@ def main():
           f"event aangemaakt: {ev}")
 
     # --- dagtotaal: leeg bij de start -------------------------------------
-    check(dagtotaal(at) == "Vandaag: verkoop €0 · trades: 0",
+    check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 0",
           f"dagtotaal begint op nul ({dagtotaal(at)!r})")
     check(at.segmented_control(key="modus").options == ["VERKOOP", "TRADE"],
           f"twee modi: verkoop en trade "
@@ -1072,7 +1073,7 @@ def main():
     at.text_input(key="zoekterm").set_value("umbreon").run()
     picks = knoppen(at, "pick_")
     check(len(picks) == 2, f"zoeken 'umbreon' geeft 2 treffers (kreeg {len(picks)})")
-    check(any("450.00" in b.label for b in picks), "comp_prijs zichtbaar in resultaat")
+    check(any("450,00" in b.label for b in picks), "comp_prijs zichtbaar in resultaat")
     check(any("EVS" in b.label for b in picks), "set_code zichtbaar in resultaat")
 
     at.text_input(key="zoekterm").set_value("umbreon vmax").run()
@@ -1088,7 +1089,7 @@ def main():
           f"geen 'nan' in resultaatregels bij lege set_code ({labels})")
     check(any("PSA 9" in lb for lb in labels) and any("GD" in lb for lb in labels),
           f"staat/grade scheidt gelijknamige kaarten ({labels})")
-    check(labels and "300.00" in labels[0],
+    check(labels and "300,00" in labels[0],
           f"duurste variant staat bovenaan bij gelijke naam ({labels})")
 
     # --- voorraad-indicator bij het zoekresultaat -------------------------
@@ -1100,17 +1101,17 @@ def main():
     # --- slabs/sealed zonder comp_prijs: terugval op de cm-prijs -----------
     at.text_input(key="zoekterm").set_value("pika van gogh").run()
     labels = [b.label for b in knoppen(at, "pick_")]
-    check(labels and "852.00" in labels[0],
+    check(labels and "852,00" in labels[0],
           f"slab zonder comp toont de cm-prijs ({labels})")
     check(labels and "cm" in labels[0],
           f"cm-prijs is als zodanig gelabeld, niet als comp ({labels})")
     at.text_input(key="zoekterm").set_value("moltres").run()
     labels = [b.label for b in knoppen(at, "pick_")]
-    check(labels and "330.00" in labels[0] and "€ ?" not in labels[0],
+    check(labels and "330,00" in labels[0] and "€ ?" not in labels[0],
           f"sealed zonder comp toont de cm-prijs ({labels})")
     at.text_input(key="zoekterm").set_value("151 etb").run()
     labels = [b.label for b in knoppen(at, "pick_")]
-    check(labels and "500.00" in labels[0] and " cm" not in labels[0],
+    check(labels and "500,00" in labels[0] and " cm" not in labels[0],
           f"comp gaat vóór cm en krijgt geen cm-label ({labels})")
 
     kies(at, "shining gyarados")
@@ -1147,11 +1148,11 @@ def main():
     # --- reset + bevestiging ---------------------------------------------
     check(at.session_state["mandje"] == [], "mandje leeg na vastleggen")
     bev = at.session_state["bevestiging"]
-    check(bev == "✓ Vastgelegd — Umbreon VMAX (Alternate Art) · €430.00",
+    check(bev == "✓ Vastgelegd — Umbreon VMAX (Alternate Art) · € 430,00",
           f"bevestiging noemt wat en hoeveel: {bev}")
     check(any("tc-ok" in m.value and bev in m.value for m in at.markdown),
           "bevestiging staat als vervagend blok op het scherm")
-    check(dagtotaal(at) == "Vandaag: verkoop €430 · trades: 0",
+    check(dagtotaal(at) == "Vandaag: verkoop € 430,00 · trades: 0",
           f"dagtotaal ververst na de verkoop ({dagtotaal(at)!r})")
 
     # --- tweede invoer direct erna ---------------------------------------
@@ -1161,7 +1162,7 @@ def main():
     at.button(key="vastleggen").click().run()
     r = rijen(engine)
     check(len(r) == 2, f"tweede invoer direct erna werkt (kreeg {len(r)} rijen)")
-    check(dagtotaal(at) == "Vandaag: verkoop €490 · trades: 0",
+    check(dagtotaal(at) == "Vandaag: verkoop € 490,00 · trades: 0",
           f"dagtotaal telt de tweede verkoop mee ({dagtotaal(at)!r})")
 
     # --- kaart zonder prijs ------------------------------------------------
@@ -1203,7 +1204,7 @@ def main():
     check(len(log) == 1, "compacte lijst met laatste invoeren wordt getoond")
     if log:
         check(log[0].count("<br>") == 2, f"3 regels in de lijst ({log[0].count('<br>') + 1})")
-        check("+€430" in log[0] and "+€60" in log[0],
+        check("+€ 430,00" in log[0] and "+€ 60,00" in log[0],
               f"verkopen met + ({log[0][:120]})")
     check(not at.dataframe, "geen tabel meer op het invoerscherm")
 
@@ -1245,7 +1246,7 @@ def main():
     check([float(x["bedrag"]) for x in r] == [430.0, 60.0, 40.0, 25.0],
           f"eigen vrije invoer weg, die van de collega blijft "
           f"({[float(x['bedrag']) for x in r]})")
-    check(dagtotaal(at) == "Vandaag: verkoop €555 · trades: 0",
+    check(dagtotaal(at) == "Vandaag: verkoop € 555,00 · trades: 0",
           f"dagtotaal loopt terug na undo ({dagtotaal(at)!r})")
 
     at.button(key="undo").click().run()

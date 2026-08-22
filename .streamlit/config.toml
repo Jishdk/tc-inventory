@@ -1,15 +1,24 @@
 # Streamlit-thema voor de beurs-app (en het dashboard).
 #
-# Vastgezet op light: de app wordt op een beursvloer bij daglicht gebruikt en de
-# eigen CSS is daarop afgestemd — een telefoon in dark mode gaf anders een heel
-# ander scherm dan wat we hier testen.
+# Dark-first, volgens de TC-huisstijl: surface-page als achtergrond, text-primary
+# als tekst, TC-rood als primaryColor. De eigen CSS in beurs_app.py bouwt daarop
+# verder met de card-surfaces en de glows.
 #
-# Kleuren volgen de TC-huisstijl (zie ../CLAUDE.md). Komt de definitieve
-# designer-huisstijl binnen, dan is dit het enige bestand dat mee hoeft.
+# Let op: de app wordt op een beursvloer bij daglicht gebruikt. Donker leest daar
+# lastiger dan licht; dat is een bewuste keuze voor de huisstijl. Valt het in de
+# praktijk tegen, dan is dit bestand het enige dat terug hoeft — zet base op
+# "light" en de oude waarden staan in de git-historie.
+#
+# Streamlit leest dit uit de werkmap van de app; op Streamlit Cloud is dat de
+# repo-root.
 
 [theme]
-base = "light"
-primaryColor = "#F20519"           # TC primary red
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F5F7"
-textColor = "#0D0D0D"              # TC black
+base = "dark"
+primaryColor = "#F20519"           # TC primary red — de hoofdactie
+backgroundColor = "#111318"        # surface-page
+secondaryBackgroundColor = "#1A1D26"   # surface-card
+textColor = "#EDEFF4"              # text-primary
+
+# Bewust géén Luckiest Guy: dit is een interne app op een druk scherm, waar
+# leesbaarheid onder tijdsdruk voorgaat op brand-flair.
+font = "sans serif"
