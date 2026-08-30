@@ -85,6 +85,9 @@ VERWIJZERS = [
     ("transactions", "item_id"),
     ("price_points", "item_id"),
     ("match_voorstellen", "voorgesteld_item_id"),
+    # komt uit het webshop-spoor (migraties 008/009); staat wel in dezelfde
+    # database, dus de hernummering moet 'm meenemen of de DELETE loopt vast
+    ("webshop_producten", "item_id"),
 ]
 
 

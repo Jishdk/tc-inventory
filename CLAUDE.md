@@ -239,6 +239,129 @@ Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de scr
 - Kleinigheid: de testid van een segmented control is `stButtonGroup` in Streamlit 1.60,
   niet `stSegmentedControl`. Beide staan in de CSS zodat een upgrade goed gaat.
 
+## Beurs 29 augustus 2026 — cyclus gedraaid op 30-08-2026
+
+Event **26 "Beurs 29 augustus 2026"** (`events.id = 26`, 29-08, geen locatie ingevuld).
+De hele vaste beurscyclus is doorlopen; de Excel is bijgewerkt en sluit rij voor rij aan.
+
+### Eindstand
+
+| | |
+|---|---|
+| `items` | **825** (was 763), **1435 stuks** na afboeken (1540 in v7) |
+| voorraadwaarde (CM) | **€137.259,15** |
+| verkoopwaarde (comp) | €148.013,55 |
+| negatieve standen | **0** |
+| uitverkocht | 145 |
+| verkoop event 26 | **€10.712,50** over 94 regels |
+| gemarkeerd als dubbel | €6.687,50 over 38 regels |
+| trades event 26 | **19 afspraken**, cash netto **+€2.017** (€2.772 in, €755 bijgelegd), 22 kaarten eruit |
+| afgeboekt | 101 regels = 105 stuks over 83 kaarten (20 uit trades) |
+
+Rij-voor-rij gecontroleerd: **0 afwijkingen op 825 kaarten**, `Vorig aantal = Aantal`
+overal, `Verkocht = 0` overal.
+
+### De app schreef naar het verkeerde event — let hierop na elke beurs
+
+`EVENT_NAAM` in `beurs_app.py` staat nog hard op *Cardmaniacs Nijmegen 15-16 augustus*.
+Alle 174 regels van 29-08 kwamen daardoor binnen op **event 3** met `datum` = **30-08**
+(de dag van invoer, niet de beursdag). Ze zijn verplaatst naar event 26 en op 29-08 gezet,
+met de reden in `opschoon_notitie`.
+
+⚠️ **Zet `EVENT_NAAM` vóór de volgende beurs op het nieuwe event**, anders moet dit elke
+keer met de hand recht worden gezet. Dit is het eerste dat je na een beurs controleert.
+
+### De cascade van 19:20 — 6x hetzelfde mandje
+
+Tussen 19:20:17 en 19:20:49 is één mandje **zes keer** weggeschreven: twee identieke
+complete mandjes van 17 regels (€2.768) en vier kortere voorlopers ervan. Eén compleet
+mandje (`b71288653ecc4e5ba0c7f9c0c9c7bb85`) blijft staan; de overige **37 regels
+(€6.447,50)** dragen `is_dubbel` met de reden erbij. Plus 1 losse dubbele tik
+(#572 Captain Pikachu €240) = 38 regels, €6.687,50.
+
+Dat mandje is trouwens géén klant: de regels vallen stuk voor stuk op **losse**
+WhatsApp-berichten tussen 14:05 en 15:07. Het is een inhaalslag die in één mandje is
+ingetikt. Dat is prima — de app schrijft toch per kaart een eigen regel.
+
+**Het bewijs zat in de reconciliatie, niet in de tijdstempels.** Zonder de dedup staat de
+app €6,7k boven WhatsApp; met de dedup is het verschil €192 op €10,7k, en dat verschil
+loopt de goede kant op (WhatsApp heeft 18 berichten zonder leesbaar bedrag).
+
+### Invoervolgorde = WhatsApp-volgorde, en dat is een meetinstrument
+
+Alles is 's avonds op 30-08 in één sessie uit de WhatsApp-chat overgetikt, in
+chronologische volgorde. De invoervolgorde is daarmee betrouwbaarder dan de tijdstempel:
+de N-de afspraak in de app is het N-de relevante bericht in de chat. Twee open vragen
+zijn daar direct mee opgelost:
+
+- **Lucario VSTAR (+€18)** valt precies op WhatsApp 14:53 "boven erin, onder eruit" —
+  een trade wiens bedrag alleen op de foto stond. De app is de enige bron; €18 klopt.
+  WhatsApp 14:49 "Trade plus 85 cash" is een ándere trade en staat niet in de app.
+- **Mega Dream 19:07** stond als trade met €0 cash, maar valt op WhatsApp 13:13: een foto
+  met bijschrift "95" en geen trade-woord. Comp-prijs van Mega Dream is precies €95.
+  Omgezet naar een **verkoop van €95**; het losse cash-anker (#561) staat er nog met
+  `is_dubbel`.
+
+### Trade-cash was een leesprobleem, geen invoerfout
+
+De cash-regel draagt in `ruwe_tekst` **wat er binnenkwam**, niet wat eruit ging. Daardoor
+las de Mega Dream-trade als "Mega Evolution Bulbassaur" — dat is de kaart die wíj
+ontvingen. Alle drie de bedragen die het team aanwees (Mega Charizard X +€200,
+Bulbasaur +€10, Mega Dream +€70) stonden al goed in de database. 15 van de 20 trades
+matchen letterlijk met WhatsApp; de vier die afweken zijn alle vier verklaard:
+
+| Trade | DB | WhatsApp | |
+|---|---|---|---|
+| Typhlosion | −€150 | "typlosion eruit en 150 bijbetaald" | wij legden bij |
+| Giratina slab | +€335 | "235 cash, 100 tikkie" | app telde beide samen |
+| Latios GX | −€595 | "Ingekocht voot 595" | wij legden bij |
+| Charizard VMAX | −€10 | "Mew er in en we betalen 10 eur" | klopt |
+
+### Drie WhatsApp-trades staan niet in de app
+
+Gecontroleerd dat de bedragen nergens anders opduiken:
+
+- 10:28 — masterballs eruit, "95 trade waarde, 91 sale, 4 euro erbij voor hem"
+- 11:31 — "Eruit 1350 deels trade"
+- 14:49 — "Trade plus 85 cash"
+
+### Twee correcties uit de werkelijkheid (werkelijkheid wint van de data)
+
+- **Meowth 107/088** stond in v7 op 0 terwijl de kaart er fysiek lag en verkocht is.
+  In v7 op `Aantal = 1`, `Vorig aantal = 1` gezet; na afboeken staat hij op 0.
+- **Storm Emerald** stond al in de nieuwe v7 (10 stuks, Sealed, code `m6`, comp €145) en
+  is hernoemd naar **"Storm Emerald sealed booster box"** zodat de vrije invoer er
+  eenduidig op matcht. Er gingen er **8** weg: 7 verkocht + 1 in een trade. Staat nu op 2.
+
+### `webshop_producten` hing de import op
+
+`import_inventory_v3.py` kende drie tabellen met een foreign key naar `items`; sinds het
+webshop-spoor (migraties 008/009) is er een vierde. De DELETE liep daarop stuk en de hele
+import rolde terug. `webshop_producten.item_id` staat nu in `VERWIJZERS`, en alle 87
+koppelingen overleven de hernummering. **Komt er een nieuwe tabel met een FK naar `items`,
+dan moet die daar ook bij.**
+
+### Ho-oh 140/195 is uit v7 verwijderd
+
+Die rij stond op 0 en is in de nieuwe v7 weggehaald. `transactions` #306 en #307 verliezen
+daardoor hun `item_id`; beide zijn oude event-3-regels die al afgehandeld waren (#306
+afgeboekt, #307 gemarkeerd als dubbele tik). De reden staat in hun `opschoon_notitie`.
+Voor de omzet maakt het niets uit — die is een eigenschap van `transactions`.
+
+### Nog open: 15 regels vrije invoer (€2.232,50)
+
+Gekoppeld zijn er 20 met de hand of automatisch (o.a. beide Gengar-slabs `0307/07`, de
+Umbreon PSA 8-slab, Mewtwo DRI via WhatsApp "Mewtwo dri eruit", en Iron Valiant 249/182
+die dezelfde beurs via een trade binnenkwam). De rest staat in
+**`data/twijfel_koppeling_29aug.csv`** met per geval de kandidaat en de vraag erbij.
+Ze **tellen mee in de omzet**, alleen de voorraadafboeking ontbreekt. Twee patronen:
+
+- **Slabs die v7 alleen als raw single kent** (Blastoise 151, Charizard 151 PSA 8,
+  Pikachu gym card, Pikachu pokemon go, Captain Pikachu PSA 9) — route is een nieuwe
+  Slab-regel in v7, niet een koppeling in de database.
+- **First Partner-promos die er nog niet in staan** (Chimchar 041, Litten 044,
+  Popplio 045, en de zes uit #568 — die regel zegt het zelf).
+
 ## Aansluiting met het Dashboard-tabblad (v6)
 
 Gecontroleerd op 15-08-2026: **alle geldbedragen sluiten tot op de euro aan** op het
