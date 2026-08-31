@@ -249,11 +249,11 @@ De hele vaste beurscyclus is doorlopen; de Excel is bijgewerkt en sluit rij voor
 
 | | |
 |---|---|
-| `items` | **840** (was 763), **1435 stuks** na afboeken |
-| voorraadwaarde (CM) | **€137.259,15** |
-| verkoopwaarde (comp) | €148.013,55 |
+| `items` | **840** (was 763), **1433 stuks** na afboeken |
+| voorraadwaarde (CM) | **€136.189,15** |
+| verkoopwaarde (comp) | €146.943,55 |
 | negatieve standen | **0** |
-| uitverkocht | 160 |
+| uitverkocht | 162 |
 | verkoop event 26 | **€10.712,50** over 94 regels |
 | gemarkeerd als dubbel | €6.687,50 over 38 regels |
 | trades event 26 | **22 afspraken**, cash netto **+€3.456** (€4.211 in, €755 bijgelegd) |
@@ -384,11 +384,30 @@ grade, categorie of prijs, en dan is een nieuwe regel eerlijker dan een gok.
 Alle 15 stonden op `Aantal = 1` en zijn afgeboekt naar **0**. De voorraadwaarde verandert
 daardoor niet — ze kwamen binnen en gingen dezelfde beurs weer weg.
 
-⚠️ **Twee zijn bewust náást een bestaand item gezet** en verdienen een blik als iemand ooit
-de voorraad naloopt: *Charizard 151 PSA 8* (v7 had al een Charizard 151-slab in PSA 9) en
-*Captain Pikachu simplified chinese PSA 9* (v7 had al `0709/09` op €720). Ook *Dragonite
-PSA 9* kán dezelfde kaart zijn als de bestaande Dragonite-slab `246/193`; die kwam via een
-trade binnen op deze beurs. Zijn het toch dezelfde kaarten, dan staat de voorraad 1 te hoog.
+### Drie gelijkende slabs uitgezocht (31-08)
+
+Drie van de nieuwe slabs stonden náást een bestaande v7-regel die er sterk op leek. Wat de
+knoop doorhakte was **wanneer de oude regel in v7 verscheen**:
+
+| Oude regel | Stond al in v7 van 19-08? | Oordeel | Aantal nu |
+|---|---|---|---|
+| Charizard 151 PSA 9, €387 | **ja** — bestaande voorraad | andere kaart dan de PSA 8 van €360 | blijft **1** |
+| Captain Pikachu `0709/09`, €720 | nee — nieuw op 30-08 | zelfde kaart, team bevestigde: geen meer | **0** |
+| Dragonite `246/193`, €350 | nee — nieuw op 30-08 | zelfde kaart | **0** |
+
+Bij Dragonite is het hard te maken: de cash-regel van de trade van 13:43 zegt dat er een
+**"Dragonite slab 192"** binnenkwam, en de verkoop van 16:15 draagt **code 192**. Erin en
+eruit op dezelfde beurs; de `246/193` in v7 is een tikfout. Bij Captain Pikachu was er geen
+bewijs in de chat (de trade van 11:32 bracht "2 burgerchu singles + 3 slabs" binnen, niet
+nader benoemd) — daar gaf het team de doorslag.
+
+Beide zijn **in v7 op 0 gezet** in plaats van samengevoegd met de nieuwe regel. Dat scheelt
+het verleggen van transacties en het resetten van `afgeboekt_op`, en de voorraad komt op
+hetzelfde uit. Alle vier de rijen (495, 500, 835, 841) plus de Charizard op rij 560 dragen
+nu een notitie in kolom S die naar de andere verwijst, zodat de dubbeling gedocumenteerd is
+in plaats van stil.
+
+Dat kost 2 stuks en **€1.070** aan voorraadwaarde (€720 + €350).
 
 ### Drie WhatsApp-trades generiek vastgelegd (31-08)
 
