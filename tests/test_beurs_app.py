@@ -10,6 +10,7 @@ dagtotaal, aantallen, de voorraad-indicator, de dubbel-check en undo.
 
 import datetime
 import logging
+import os
 import re
 import sqlite3
 import sys
@@ -31,6 +32,14 @@ sqlite3.register_adapter(datetime.time, lambda t: t.isoformat())
 INVENTORY = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(INVENTORY))
 sys.path.insert(0, str(INVENTORY / "src"))
+
+# Het event zit niet meer in de code maar in de omgeving — zoals op Streamlit
+# Cloud in de secrets. Zetten vóór de app geladen wordt, anders valt hij terug op
+# het laatste event in de database (en die is hier bij de start leeg).
+TEST_EVENT = "Testbeurs 2026"
+os.environ["TC_EVENT_NAAM"] = TEST_EVENT
+os.environ["TC_EVENT_DATUM"] = "2026-08-29"
+os.environ["TC_EVENT_LOCATIE"] = "Houten"
 
 SCHEMA = """
 CREATE TABLE events (
@@ -1039,6 +1048,54 @@ def scenarios(AppTest, db):
     print()
 
 
+def event_keuze_tests(AppTest, db):
+    """Zonder TC_EVENT_NAAM boekt de app op het laatst aangemaakte event.
+
+    Dat is de route die voorkomt wat er op 29-08 misging: de app boekte op een
+    event uit de code in plaats van op de beurs van die dag.
+    """
+    import streamlit as st
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO events (name, event_date, location, type) "
+                       "VALUES ('Oude beurs', '2026-07-25', 'Rotterdam', 'beurs')"))
+        c.execute(text("INSERT INTO events (name, event_date, location, type) "
+                       "VALUES ('Nieuwste beurs', '2026-08-29', 'Houten', 'beurs')"))
+
+    bewaard = {k: os.environ.pop(k) for k in
+               ("TC_EVENT_NAAM", "TC_EVENT_DATUM", "TC_EVENT_LOCATIE")
+               if k in os.environ}
+    try:
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+        at.run()
+        check(not at.exception, "app start zonder TC_EVENT_NAAM")
+        check(any("boekt op: Nieuwste beurs" in m.value for m in at.markdown),
+              f"valt terug op het meest recente event "
+              f"({[m.value for m in at.markdown if 'boekt op' in m.value]})")
+        with engine.connect() as c:
+            n = c.execute(text("SELECT COUNT(*) FROM events")).scalar()
+        check(n == 2, f"er wordt geen nieuw event aangemaakt bij de terugval ({n})")
+
+        # en de invoer landt dan ook op dat event
+        at.text_input(key="zoekterm").set_value("umbreon vmax").run()
+        knoppen(at, "pick_")[0].click().run()
+        at.button(key="vastleggen").click().run()
+        with engine.connect() as c:
+            ev = c.execute(text("SELECT event_id FROM transactions")).fetchall()
+        with engine.connect() as c:
+            nieuwste = c.execute(text("SELECT id FROM events WHERE name='Nieuwste beurs'")).scalar()
+        check(all(r[0] == nieuwste for r in ev) and ev,
+              f"invoer wordt op dat event geboekt (event_id {[r[0] for r in ev]}, "
+              f"verwacht {nieuwste})")
+    finally:
+        os.environ.update(bewaard)
+        st.cache_resource.clear()
+        st.cache_data.clear()
+
+
 def main():
     engine = maak_engine()
 
@@ -1059,8 +1116,11 @@ def main():
     # --- event aangemaakt -------------------------------------------------
     with engine.connect() as c:
         ev = c.execute(text("SELECT id, name, event_date, type FROM events")).fetchall()
-    check(len(ev) == 1 and ev[0][1] == "Cardmaniacs Nijmegen 15-16 augustus 2026",
-          f"event aangemaakt: {ev}")
+    check(len(ev) == 1 and ev[0][1] == TEST_EVENT,
+          f"event uit TC_EVENT_NAAM aangemaakt: {ev}")
+    check(ev[0][2] == "2026-08-29", f"event_date uit TC_EVENT_DATUM: {ev[0][2]!r}")
+    check(any(f"boekt op: {TEST_EVENT}" in m.value for m in at.markdown),
+          "de app toont op welk event hij boekt")
 
     # --- dagtotaal: leeg bij de start -------------------------------------
     check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 0",
@@ -1264,6 +1324,8 @@ def main():
     nieuwe_features(AppTest, db)
     kern_snel(AppTest, db)
     scenarios(AppTest, db)
+
+    event_keuze_tests(AppTest, db)
 
     # --- schrijffout: invoer blijft behouden ------------------------------
     kapot = create_engine("postgresql+psycopg2://x:y@127.0.0.1:1/none",

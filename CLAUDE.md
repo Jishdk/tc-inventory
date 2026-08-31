@@ -239,37 +239,52 @@ Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de scr
 - Kleinigheid: de testid van een segmented control is `stButtonGroup` in Streamlit 1.60,
   niet `stSegmentedControl`. Beide staan in de CSS zodat een upgrade goed gaat.
 
-## Beurs 29 augustus 2026 — cyclus gedraaid op 30-08-2026
+## Beurs 29 augustus 2026 — Collectable World Houten
 
-Event **26 "Beurs 29 augustus 2026"** (`events.id = 26`, 29-08, geen locatie ingevuld).
+Event **26 "Collectable World Houten"** (`events.id = 26`, 29-08, Houten). Cyclus gedraaid
+op 30-08, afgerond op 31-08.
 De hele vaste beurscyclus is doorlopen; de Excel is bijgewerkt en sluit rij voor rij aan.
 
 ### Eindstand
 
 | | |
 |---|---|
-| `items` | **825** (was 763), **1435 stuks** na afboeken (1540 in v7) |
+| `items` | **840** (was 763), **1435 stuks** na afboeken |
 | voorraadwaarde (CM) | **€137.259,15** |
 | verkoopwaarde (comp) | €148.013,55 |
 | negatieve standen | **0** |
-| uitverkocht | 145 |
+| uitverkocht | 160 |
 | verkoop event 26 | **€10.712,50** over 94 regels |
 | gemarkeerd als dubbel | €6.687,50 over 38 regels |
-| trades event 26 | **19 afspraken**, cash netto **+€2.017** (€2.772 in, €755 bijgelegd), 22 kaarten eruit |
-| afgeboekt | 101 regels = 105 stuks over 83 kaarten (20 uit trades) |
+| trades event 26 | **22 afspraken**, cash netto **+€3.456** (€4.211 in, €755 bijgelegd) |
+| afgeboekt | 116 regels = 120 stuks over 98 kaarten |
+| vrije invoer nog ongekoppeld | **0** |
 
-Rij-voor-rij gecontroleerd: **0 afwijkingen op 825 kaarten**, `Vorig aantal = Aantal`
+Rij-voor-rij gecontroleerd: **0 afwijkingen op 840 kaarten**, `Vorig aantal = Aantal`
 overal, `Verkocht = 0` overal.
 
-### De app schreef naar het verkeerde event — let hierop na elke beurs
+### De app schreef naar het verkeerde event — opgelost op 31-08
 
-`EVENT_NAAM` in `beurs_app.py` staat nog hard op *Cardmaniacs Nijmegen 15-16 augustus*.
-Alle 174 regels van 29-08 kwamen daardoor binnen op **event 3** met `datum` = **30-08**
-(de dag van invoer, niet de beursdag). Ze zijn verplaatst naar event 26 en op 29-08 gezet,
-met de reden in `opschoon_notitie`.
+`EVENT_NAAM` stond hard in `beurs_app.py` op *Cardmaniacs Nijmegen 15-16 augustus*. Alle
+174 regels van 29-08 kwamen daardoor binnen op **event 3** met `datum` = **30-08** (de dag
+van invoer, niet de beursdag). Ze zijn verplaatst naar event 26 en op 29-08 gezet.
 
-⚠️ **Zet `EVENT_NAAM` vóór de volgende beurs op het nieuwe event**, anders moet dit elke
-keer met de hand recht worden gezet. Dit is het eerste dat je na een beurs controleert.
+**Het event zit nu niet meer in de code.** `event()` in `beurs_app.py` bepaalt het zo:
+
+1. Staat **`TC_EVENT_NAAM`** in de secrets/omgeving, dan is dat het event. Het wordt
+   aangemaakt als het nog niet bestaat, met `TC_EVENT_DATUM` (default vandaag) en
+   `TC_EVENT_LOCATIE`. Een nieuwe beurs kost dus één secret, geen deploy.
+2. Anders: **het meest recente event in de database** (`event_date DESC, id DESC`). Wie de
+   beurs voorbereidt door 'm alvast aan te maken, hoeft niets in te stellen.
+
+`TC_EVENT_DAGEN` (komma-gescheiden ISO-datums) stuurt het grijze "valt buiten de
+beursdagen"-terzijde; zonder die variabele is het de datum van het event zelf.
+
+De app toont nu ook **"boekt op: \<eventnaam\>"** onder het dagtotaal. Dat is precies wat
+op 29-08 ontbrak: er was nergens te zien waar de invoer heen ging.
+
+⚠️ Er staat **geen** `TC_EVENT_NAAM` ingesteld, dus de app volgt route 2. Maak de volgende
+beurs dus aan als event vóór of tijdens de beurs — of zet de secret.
 
 ### De cascade van 19:20 — 6x hetzelfde mandje
 
@@ -348,19 +363,65 @@ daardoor hun `item_id`; beide zijn oude event-3-regels die al afgehandeld waren 
 afgeboekt, #307 gemarkeerd als dubbele tik). De reden staat in hun `opschoon_notitie`.
 Voor de omzet maakt het niets uit — die is een eigenschap van `transactions`.
 
-### Nog open: 15 regels vrije invoer (€2.232,50)
+### De 15 open regels zijn afgehandeld (31-08)
 
-Gekoppeld zijn er 20 met de hand of automatisch (o.a. beide Gengar-slabs `0307/07`, de
-Umbreon PSA 8-slab, Mewtwo DRI via WhatsApp "Mewtwo dri eruit", en Iron Valiant 249/182
-die dezelfde beurs via een trade binnenkwam). De rest staat in
-**`data/twijfel_koppeling_29aug.csv`** met per geval de kandidaat en de vraag erbij.
-Ze **tellen mee in de omzet**, alleen de voorraadafboeking ontbreekt. Twee patronen:
+Alle vrije invoer van deze beurs is nu gekoppeld; `nog ongekoppeld = 0`. De 15 gevallen
+uit `data/twijfel_koppeling_29aug.csv` zijn als **nieuwe regels in v7** gezet (rij 827-841)
+in plaats van geforceerd op een bestaand item gekoppeld — de kandidaten weken steeds af op
+grade, categorie of prijs, en dan is een nieuwe regel eerlijker dan een gok.
 
-- **Slabs die v7 alleen als raw single kent** (Blastoise 151, Charizard 151 PSA 8,
-  Pikachu gym card, Pikachu pokemon go, Captain Pikachu PSA 9) — route is een nieuwe
-  Slab-regel in v7, niet een koppeling in de database.
-- **First Partner-promos die er nog niet in staan** (Chimchar 041, Litten 044,
-  Popplio 045, en de zes uit #568 — die regel zegt het zelf).
+- **8 slabs** (categorie `Slab`, grading uit de vrije tekst): Umbreon terastal PSA 10,
+  Charizard 151 PSA 8, Pikachu holo Pokémon Go card file set PSA 10, Captain Pikachu
+  simplified chinese PSA 9, Blastoise 151 japans PSA 10, Giratina PSA 10, Pikachu Pokémon
+  gym card PSA 10, Dragonite PSA 9.
+- **7 singles**, waarvan 5 met `Promo = Ja`: Chimchar 041, Litten 044, Popplio 045,
+  Gladion's Final Battle, Eevee Chinees, en twee lot-regels voor de First Partner-promos
+  die als groepje weggingen.
+- `Prijs cm` = het verkochte bedrag als indicatie; leeg waar de kaart in een trade wegging
+  (Eevee Chinees, Giratina) en er dus geen bedrag aan hangt. Elke regel draagt een notitie
+  in kolom S waarin staat dat hij op 31-08 achteraf is toegevoegd.
+
+Alle 15 stonden op `Aantal = 1` en zijn afgeboekt naar **0**. De voorraadwaarde verandert
+daardoor niet — ze kwamen binnen en gingen dezelfde beurs weer weg.
+
+⚠️ **Twee zijn bewust náást een bestaand item gezet** en verdienen een blik als iemand ooit
+de voorraad naloopt: *Charizard 151 PSA 8* (v7 had al een Charizard 151-slab in PSA 9) en
+*Captain Pikachu simplified chinese PSA 9* (v7 had al `0709/09` op €720). Ook *Dragonite
+PSA 9* kán dezelfde kaart zijn als de bestaande Dragonite-slab `246/193`; die kwam via een
+trade binnen op deze beurs. Zijn het toch dezelfde kaarten, dan staat de voorraad 1 te hoog.
+
+### Drie WhatsApp-trades generiek vastgelegd (31-08)
+
+De drie trades die wel in WhatsApp stonden maar niet in de app zijn alsnog geboekt, met
+alleen de cash-regel — **welke kaarten eruit gingen is niet uitgezocht**, dus er hangt geen
+afboeking aan. Alle drie dragen
+`opschoon_notitie = 'generiek vastgelegd uit WhatsApp, eruit-kaarten niet gekoppeld'` en
+een `group_id` van de vorm `wa-29aug-<tijd>`.
+
+| Regel | Cash | `group_id` |
+|---|---|---|
+| Trade masterballs (WA 10:28) | +€4 | `wa-29aug-1028` |
+| Trade deels cash (WA 11:31) | +€1.350 | `wa-29aug-1131` |
+| Trade (WA 14:49) | +€85 | `wa-29aug-1449` |
+
+Ze hebben géén `item_id`, dus `afboeken_sales.py` laat ze met rust — dat is gecontroleerd
+met een dry-run die daarna "0 regels" gaf. Daarmee gaan de trades van **19 naar 22
+afspraken** en de cash van **+€2.017 naar +€3.456**.
+
+### Hoe de vrije invoer is gekoppeld (30-08)
+
+20 regels zijn op 30-08 aan een bestaand v7-item gekoppeld, met de hand of automatisch:
+o.a. beide Gengar-slabs `0307/07`, de Umbreon PSA 8-slab, Mewtwo DRI (via WhatsApp
+"Mewtwo dri eruit"), en Iron Valiant 249/182 die dezelfde beurs via een trade binnenkwam.
+De 15 die overbleven staan met hun afgewogen kandidaat in
+`data/twijfel_koppeling_29aug.csv` — dat bestand is nu een **verantwoording**, geen
+actielijst: die 15 zijn op 31-08 als nieuwe v7-regels toegevoegd (zie hierboven).
+
+De twee filters die het verschil maakten tussen koppelen en gokken zijn dezelfde als bij
+Cardmaniacs: **een code op de regel moet exact matchen** (een item *zonder* code is geen
+bevestiging), en **onderscheidende woorden** uit de ruwe tekst — `psa`, `slab`, `promo`,
+`bbx` — die niet in de itemnaam staan blokkeren de koppeling. Dat laatste is precies waarom
+de acht slabs bleven liggen: v7 kende ze alleen als raw single.
 
 ## Aansluiting met het Dashboard-tabblad (v6)
 

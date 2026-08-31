@@ -44,10 +44,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 # ------------------------------------------------------------------ constanten
 
-EVENT_NAAM = "Cardmaniacs Nijmegen 15-16 augustus 2026"
-EVENT_DATUM = date(2026, 8, 15)
-EVENT_LOCATIE = "Nijmegen"
-BEURSDAGEN = {date(2026, 8, 15), date(2026, 8, 16)}
+# Het event staat bewust *niet* in de code. Het stond hier hardcoded, en na de
+# beurs van 29-08 bleek de invoer daardoor op het vorige event te zijn geboekt —
+# met de datum van invoer in plaats van de beursdag. Zie `event()` hieronder voor
+# de volgorde waarin het nu wordt bepaald.
 
 AFZENDER = "TC"          # één gedeelde gebruiker
 MODI = ["VERKOOP", "TRADE"]
@@ -398,7 +398,15 @@ INSERT INTO events (name, event_date, location, type)
 VALUES (:name, :event_date, :location, 'beurs')
 ON CONFLICT (name) DO UPDATE SET
     event_date = EXCLUDED.event_date, location = EXCLUDED.location
-RETURNING id
+RETURNING id, name, event_date, location
+""")
+
+# Zonder TC_EVENT_NAAM boeken we op het laatst aangemaakte event. Op event_date
+# sorteren en pas daarna op id: twee beurzen op dezelfde dag komen dan alsnog in
+# de volgorde binnen waarin ze zijn aangemaakt.
+HUIDIG_EVENT = text("""
+SELECT id, name, event_date, location FROM events
+ORDER BY event_date DESC, id DESC LIMIT 1
 """)
 
 INSERT_TX = text("""
@@ -426,12 +434,50 @@ WHERE id IN :ids AND event_id = :event_id AND afgeboekt_op IS NOT NULL
 """).bindparams(bindparam("ids", expanding=True))
 
 
+def _datums(waarde: str | None) -> set[date]:
+    """"2026-08-29, 2026-08-30" -> {date(...), date(...)}. Stil bij rommel:
+    de beursdagen sturen alleen een grijs terzijde aan, geen invoer."""
+    dagen = set()
+    for stuk in (waarde or "").split(","):
+        try:
+            dagen.add(date.fromisoformat(stuk.strip()))
+        except ValueError:
+            pass
+    return dagen
+
+
 @st.cache_resource(show_spinner="Event ophalen…")
-def event_id() -> int:
+def event() -> dict:
+    """Op welk event boeken we vandaag?
+
+    1. Staat `TC_EVENT_NAAM` in de secrets/env, dan is dat het event. Het wordt
+       aangemaakt als het nog niet bestaat, met `TC_EVENT_DATUM` (default vandaag)
+       en `TC_EVENT_LOCATIE`. Zo kost een nieuwe beurs één secret, geen deploy.
+    2. Anders: het meest recente event in de database. Wie een beurs voorbereidt
+       door 'm alvast aan te maken, hoeft dus niets in te stellen.
+
+    De beursdagen komen uit `TC_EVENT_DAGEN` (komma-gescheiden) en vallen anders
+    terug op de datum van het event zelf.
+    """
+    naam = (secret("TC_EVENT_NAAM") or "").strip()
     with engine().begin() as conn:
-        return conn.execute(UPSERT_EVENT, {
-            "name": EVENT_NAAM, "event_date": EVENT_DATUM, "location": EVENT_LOCATIE,
-        }).scalar()
+        if naam:
+            datum = _datums(secret("TC_EVENT_DATUM")) or {date.today()}
+            rij = conn.execute(UPSERT_EVENT, {
+                "name": naam, "event_date": min(datum),
+                "location": (secret("TC_EVENT_LOCATIE") or "").strip() or None,
+            }).one()
+        else:
+            rij = conn.execute(HUIDIG_EVENT).one_or_none()
+            if rij is None:
+                return {}
+    dagen = _datums(secret("TC_EVENT_DAGEN")) or {rij.event_date}
+    return {"id": rij.id, "naam": rij.name, "datum": rij.event_date,
+            "locatie": rij.location, "dagen": dagen}
+
+
+def event_id() -> int:
+    return event()["id"]
 
 
 TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
@@ -986,6 +1032,21 @@ if PIN and not st.session_state.get("ontgrendeld"):
 VANDAAG = date.today()
 
 try:
+    EVENT = event()
+except SQLAlchemyError as e:
+    # Platte database: dezelfde melding als bij het laden van de kaarten. Dit is
+    # het eerste dat de app doet, dus zonder dit onderscheid zou een dode
+    # verbinding zich voordoen als een ontbrekend event.
+    st.error("Geen verbinding met de database.", icon="🚫")
+    with st.expander("Details"):
+        st.code(str(e))
+    st.stop()
+if not EVENT:
+    st.error("Geen event gevonden. Maak er een aan in de database, of zet "
+             "`TC_EVENT_NAAM` in de secrets/omgeving.", icon="📍")
+    st.stop()
+
+try:
     totalen = dagtotalen(event_id(), VANDAAG, st.session_state["tx_versie"])
 except SQLAlchemyError:
     totalen = None      # database plat: de foutmelding komt hieronder al
@@ -1009,6 +1070,11 @@ if totalen is not None:
         regel += f' &nbsp;·&nbsp; inkoop <b>€ {geld(inkoop)}</b>'
     st.markdown(f'<div class="tc-dag">{regel}</div>', unsafe_allow_html=True)
 
+# Op welk event boeken we? Klein en grijs, maar wél in beeld: op 29-08 liep alles
+# ongemerkt naar het vorige event omdat je nergens kon zien waar het heen ging.
+st.markdown(f'<div class="tc-note">boekt op: {EVENT["naam"]}</div>',
+            unsafe_allow_html=True)
+
 # ------------------------------------------------------------------ modus
 
 if len(MODI) > 1:
@@ -1018,7 +1084,7 @@ MODUS = st.session_state["modus"] or "VERKOOP"
 TRADE = MODUS == "TRADE"
 TX_TYPE = "trade" if TRADE else "verkoop"
 
-if VANDAAG not in BEURSDAGEN:
+if VANDAAG not in EVENT["dagen"]:
     # Klein en grijs: het is een terzijde, geen waarschuwing — de invoer telt gewoon.
     st.markdown(f'<div class="tc-note">{VANDAAG.strftime("%d-%m-%Y")} valt buiten de '
                 f'beursdagen — invoer telt wél mee</div>', unsafe_allow_html=True)
