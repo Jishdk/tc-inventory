@@ -48,8 +48,8 @@ CREATE TABLE events (
 CREATE TABLE items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, onze_naam TEXT NOT NULL,
     officiele_naam TEXT, code TEXT, set_code TEXT, categorie TEXT,
-    staat TEXT, grade TEXT, comp_prijs NUMERIC, prijs_cm NUMERIC,
-    aantal INTEGER NOT NULL DEFAULT 0);
+    staat TEXT, grade TEXT, taal TEXT DEFAULT 'EN', comp_prijs NUMERIC,
+    prijs_cm NUMERIC, aantal INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, item_id INTEGER,
     bron_rij INTEGER, datum DATE NOT NULL, tijd TIME, kanaal TEXT NOT NULL,
@@ -146,6 +146,25 @@ def snelknoppen(at) -> list:
 
 def mandje_namen(at) -> list:
     return [r["naam"] for r in at.session_state["mandje"]]
+
+
+def kijkkaarten(at) -> list:
+    """De kaarten van de ZOEK-modus als platte tekst, in schermvolgorde.
+
+    Tags worden door een spátie vervangen en niet weggelaten: anders plakt de
+    cm-badge aan het bedrag ("€ 852,00cm") en zou een check op het bedrag alleen
+    daardoor al falen."""
+    blok = [m.value for m in at.markdown if 'class="tc-kijk"' in m.value]
+    if not blok:
+        return []
+    stukken = blok[0].split('<div class="tc-kijk">')[1:]
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", deel)).strip()
+            for deel in stukken]
+
+
+def kijk_html(at) -> str:
+    """De ruwe HTML van de ZOEK-kaarten — voor checks op de opmaak zelf."""
+    return "".join(m.value for m in at.markdown if 'class="tc-kijk"' in m.value)
 
 
 def echt_gekozen(at, key: str) -> bool:
@@ -1048,6 +1067,174 @@ def scenarios(AppTest, db):
     print()
 
 
+def zoekmodus_tests(AppTest, db):
+    """ZOEK — prijs en voorraad opzoeken zonder iets vast te leggen.
+
+    Eigen verse database, met twee soorten extra rijen: een gelijknamig paar dat
+    alleen op taal te scheiden is, en genoeg treffers om de lijst te laten
+    aflopen (in ZOEK mogen er 20 op het scherm, bij verkoop 10)."""
+    import streamlit as st
+
+    engine = maak_engine()
+    with engine.begin() as c:
+        # Zelfde naam, zelfde code, andere taal. De tweede rij heeft helemaal
+        # geen taal — die bestaat in v7 ook, en mag geen "None" op het scherm
+        # zetten.
+        for naam, code, comp, aantal, taal in [
+                ("Mew ex", "151 193", 65.00, 3, "JP"),
+                ("Mew ex", "151 193", 60.00, 1, None)]:
+            c.execute(text(
+                "INSERT INTO items (onze_naam, code, categorie, staat, taal, "
+                "comp_prijs, aantal) VALUES (:a,:b,'single','NM',:c,:d,:e)"),
+                {"a": naam, "b": code, "c": taal, "d": comp, "e": aantal})
+        # 23 gelijknamige kaarten: zoals de veertien Pikachu's in de echte v7.
+        for i in range(23):
+            c.execute(text(
+                "INSERT INTO items (onze_naam, code, set_code, categorie, staat, "
+                "comp_prijs, aantal) VALUES (:a,:b,:c,'single','NM',:d,:e)"),
+                {"a": f"Vitrinekaart {i:02d}", "b": f"{i:03d}/100",
+                 "c": f"VK {i:03d}", "d": 2.0 + i, "e": 1 + i})
+    db.get_engine = lambda: engine
+    st.cache_resource.clear()
+    st.cache_data.clear()
+
+    print("\n" + "=" * 72)
+    print("ZOEK — opzoeken zonder verkopen")
+    print("=" * 72)
+
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    kop("Z1.", "Is ZOEK een eigen modus naast VERKOOP en TRADE?",
+        "derde knop in de moduskeuze, en te kiezen zonder dat er iets gebeurt")
+    check("ZOEK" in at.segmented_control(key="modus").options,
+          f"ZOEK staat in de moduskeuze ({at.segmented_control(key='modus').options})")
+    check(at.segmented_control(key="modus").options[0] == "VERKOOP",
+          "VERKOOP houdt de eerste positie — dat is de standaardmodus")
+    at.segmented_control(key="modus").set_value("ZOEK").run()
+    check(at.session_state["modus"] == "ZOEK", "ZOEK is te kiezen")
+    check(not at.exception, "ZOEK rendert zonder exception")
+    uitkomst(f"modi op het scherm: {at.segmented_control(key='modus').options}")
+
+    kop("Z2.", "Kun je in ZOEK per ongeluk iets vastleggen?",
+        "geen VASTLEGGEN, geen mandje, geen prijsveld, geen snelknop — niets")
+    check(not any(b.key == "vastleggen" for b in at.button),
+          "geen VASTLEGGEN-knop")
+    check(not knoppen(at, "pick_"), "zoekresultaten zijn geen knoppen")
+    check(not knoppen(at, "snel_"), "geen snelknoppen die iets in het mandje zetten")
+    check(not knoppen(at, "regel_") and not knoppen(at, "weg_"),
+          "geen mandje-regels")
+    check(not list(at.number_input),
+          f"geen enkel getalveld op het scherm ({[ni.key for ni in at.number_input]})")
+    check(not any(b.key in ("vrij_knop", "undo", "nogmaals_knop") for b in at.button),
+          "geen vrij invoeren, geen undo, geen 'nog een'")
+    check([b.key for b in at.button] == [],
+          f"er staat helemaal geen knop op dit scherm ({[b.key for b in at.button]})")
+    check(not any("boekt op:" in m.value for m in at.markdown),
+          "geen 'boekt op: <event>' — dit scherm boekt niets")
+    check(any("er wordt niets vastgelegd" in m.value for m in at.markdown),
+          "het scherm zegt zelf dat er niets wordt vastgelegd")
+    botsingen = css_botsingen(at)
+    check(not botsingen, f"geen CSS-selector die een andere widget raakt ({botsingen})")
+
+    kop("Z3.", "Wat zie je per kaart?",
+        "naam, set-code, taal, staat/grade, de comp-prijs groot, en de voorraad")
+    at.text_input(key="kijk_zoekterm").set_value("umbreon").run()
+    kaarten = kijkkaarten(at)
+    check(len(kaarten) == 2, f"'umbreon' geeft 2 kaarten (kreeg {len(kaarten)})")
+    vmax = next((k for k in kaarten if "Umbreon VMAX" in k), "")
+    for stuk in ("Umbreon VMAX", "EVS 215", "EN", "NM", "€ 450,00", "3 op voorraad"):
+        check(stuk in vmax, f"{stuk!r} staat op de kaart")
+    check('class="tc-kijk-prijs"' in kijk_html(at),
+          "de prijs staat in het grote prijs-element")
+    uitkomst(*kaarten)
+
+    kop("Z4.", "Hoe leest een slab zonder comp-prijs?",
+        "het cm-bedrag mét een duidelijk cm-label, zodat het geen vraagprijs lijkt")
+    at.text_input(key="kijk_zoekterm").set_value("pika van gogh").run()
+    kaarten = kijkkaarten(at)
+    check(len(kaarten) == 1 and "€ 852,00" in kaarten[0],
+          f"het cm-bedrag staat er ({kaarten})")
+    check('class="tc-kijk-cm"' in kijk_html(at),
+          "met een cm-badge, niet alleen als tekst achter het bedrag")
+    check(any("géén afgesproken vraagprijs" in m.value for m in at.markdown),
+          "en één keer de uitleg wat cm betekent")
+    check("PSA 9" in kaarten[0] and 'class="tc-grade"' in kijk_html(at),
+          "de grade staat erbij, in goud zoals in het mandje")
+    uitkomst(*kaarten)
+
+    kop("Z5.", "En een kaart zonder enige prijs, of zonder voorraad?",
+        "'€ ?' bij geen prijs, 'UITVERKOCHT' bij een lege voorraad")
+    at.text_input(key="kijk_zoekterm").set_value("bulbasaur").run()
+    check("€ ?" in (kijkkaarten(at) or [""])[0],
+          f"geen comp én geen cm geeft '€ ?' ({kijkkaarten(at)})")
+    at.text_input(key="kijk_zoekterm").set_value("pikachu promo").run()
+    kaarten = kijkkaarten(at)
+    check("UITVERKOCHT" in (kaarten or [""])[0] and 'class="tc-op"' in kijk_html(at),
+          f"een lege voorraad valt op ({kaarten})")
+    uitkomst(*kaarten)
+
+    kop("Z6.", "Twee kaarten met dezelfde naam én code — zijn ze te scheiden?",
+        "ja, op taal; en een kaart zonder taal zet geen 'None' op het scherm")
+    at.text_input(key="kijk_zoekterm").set_value("mew ex").run()
+    kaarten = kijkkaarten(at)
+    check(len(kaarten) == 2, f"beide Mew ex-rijen staan er ({len(kaarten)})")
+    check(any("JP" in k for k in kaarten), "de Japanse staat als JP op het scherm")
+    check(not any("None" in k or "nan" in k for k in kaarten),
+          f"de rij zonder taal toont niets in plaats van 'None' ({kaarten})")
+    uitkomst(*kaarten)
+
+    kop("Z7.", "Mag de lijst langer zijn dan bij verkoop?",
+        "20 in ZOEK tegen 10 bij verkoop, met een regel die zegt dat er meer is")
+    at.text_input(key="kijk_zoekterm").set_value("vitrine").run()
+    kaarten = kijkkaarten(at)
+    check(len(kaarten) == 20, f"20 kaarten op het scherm (kreeg {len(kaarten)})")
+    check(any("20 van 23 treffers" in m.value for m in at.markdown),
+          "en een regel die zegt hoeveel er niet in beeld staan")
+    uitkomst(f"23 treffers → {len(kaarten)} op het scherm")
+
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    at.text_input(key="zoekterm").set_value("vitrine").run()
+    check(len(knoppen(at, "pick_")) == 10,
+          f"bij verkoop blijft het 10 (kreeg {len(knoppen(at, 'pick_'))})")
+
+    kop("Z8.", "Blijft de modus staan voor wie alleen opzoekt?",
+        "ZOEK blijft ZOEK — ook na een rerun, en de zoekterm blijft staan")
+    at.segmented_control(key="modus").set_value("ZOEK").run()
+    at.text_input(key="kijk_zoekterm").set_value("umbreon vmax").run()
+    at.run()
+    check(at.session_state["modus"] == "ZOEK", "nog steeds in ZOEK na een rerun")
+    check(at.text_input(key="kijk_zoekterm").value == "umbreon vmax",
+          f"de zoekterm blijft staan ({at.text_input(key='kijk_zoekterm').value!r})")
+    check(len(kijkkaarten(at)) == 1, "en het resultaat staat er nog")
+    uitkomst("modus en zoekterm overleven een rerun")
+
+    kop("Z9.", "Overleeft een half ingetikte verkoop een uitstapje naar ZOEK?",
+        "aantal en bedrag staan er na terugkomst nog precies zo")
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    kies(at, "charizard")
+    at.button(key=knoppen(at, "plus_")[0].key).click().run()
+    at.button(key=knoppen(at, "plus_")[0].key).click().run()
+    zet_prijs(at, 0, 400.0)
+    check(len(at.session_state["mandje"]) == 1, "één kaart in het mandje")
+    at.segmented_control(key="modus").set_value("ZOEK").run()
+    check(len(at.session_state["mandje"]) == 1, "het mandje blijft bestaan in ZOEK")
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    check(len(at.session_state["mandje"]) == 1, "en staat er bij terugkomst nog")
+    check(at.session_state["stuks_" + str(at.session_state["mandje"][0]["rid"])] == 3,
+          "het aantal staat nog op 3")
+    check(prijsvelden(at)[0].value == 400.0,
+          f"en het bedrag nog op 400 ({prijsvelden(at)[0].value})")
+    uitkomst("3× Charizard ex à €400 ongewijzigd na een uitstapje naar ZOEK")
+
+    kop("Z10.", "Heeft dit alles iets naar de database geschreven?",
+        "nul rijen — ZOEK leest alleen")
+    r = rijen(engine)
+    check(r == [], f"transactions is nog steeds leeg (kreeg {len(r)} rijen)")
+    uitkomst(f"regels in transactions na de hele ZOEK-sessie: {len(r)}")
+    print()
+
+
 def event_keuze_tests(AppTest, db):
     """Zonder TC_EVENT_NAAM boekt de app op het laatst aangemaakte event.
 
@@ -1125,8 +1312,9 @@ def main():
     # --- dagtotaal: leeg bij de start -------------------------------------
     check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 0",
           f"dagtotaal begint op nul ({dagtotaal(at)!r})")
-    check(at.segmented_control(key="modus").options == ["VERKOOP", "TRADE"],
-          f"twee modi: verkoop en trade "
+    check(at.segmented_control(key="modus").options
+          == ["VERKOOP", "TRADE", "ZOEK"],
+          f"drie modi: verkoop, trade en opzoeken "
           f"({at.segmented_control(key='modus').options})")
 
     # --- zoeken -----------------------------------------------------------
@@ -1318,6 +1506,7 @@ def main():
 
     mandje_tests(AppTest, db)
     trade_tests(AppTest, db)
+    zoekmodus_tests(AppTest, db)
     snelknoppen_tests(AppTest, db)
     presets_tests(AppTest, db)
     nogmaals_tests(AppTest, db)

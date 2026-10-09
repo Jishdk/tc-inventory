@@ -50,7 +50,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 # de volgorde waarin het nu wordt bepaald.
 
 AFZENDER = "TC"          # één gedeelde gebruiker
-MODI = ["VERKOOP", "TRADE"]
+# ZOEK is geen invoermodus maar een kijkmodus: prijs en voorraad opzoeken voor
+# een klant zonder iets vast te leggen. Hij staat achteraan omdat VERKOOP de
+# eerste positie hoort te houden — dat is de modus waar je standaard in staat.
+MODI = ["VERKOOP", "TRADE", "ZOEK"]
 PRIJS_MODI = ["Per kaart", "Totaalprijs"]
 # Wat de klant bijlegt of van ons krijgt. De richting staat in de knop zelf: geen
 # plus/min waar je op de beursvloer overheen kijkt en de trade omgekeerd inboekt.
@@ -58,6 +61,10 @@ CASH_ONTVANGEN = "WIJ ONTVANGEN €"
 CASH_BIJLEGGEN = "WIJ LEGGEN BIJ €"
 CASH_RICHTINGEN = [CASH_ONTVANGEN, CASH_BIJLEGGEN]
 MAX_RESULTATEN = 10
+# In ZOEK browse je in plaats van kiezen: daar mag de lijst langer zijn. Bij
+# verkoop is een korte lijst juist de bedoeling — hoe minder er staat, hoe
+# kleiner de kans dat je naast de bedoelde kaart tikt.
+MAX_RESULTATEN_ZOEK = 20
 
 # Hardlopers: één tik zet het product in het mandje met zijn eigen prijs erbij.
 # `knop` is wat er op de knop staat — kort houden, het moet naast twee andere op
@@ -348,6 +355,38 @@ BASIS_CSS = """
       margin: .4rem 0; color: var(--text);}
   .tc-inbegrepen {color: var(--muted-elev);}
 
+  /* ---- ZOEK-modus: kaarten om te lezen, niet om aan te tikken ----------
+     Platte HTML zonder knop. De prijs is het grootste element: dat is waarvoor
+     dit scherm bestaat. Het 4px-frame links houdt 'm visueel familie van het
+     zoekresultaat en de mandje-regel. */
+  .tc-kijk {background: var(--card); border: 1px solid var(--line);
+      border-left: 4px solid var(--elev); border-radius: var(--r-sm);
+      padding: .6rem .75rem .55rem; margin-bottom: .45rem;}
+  .tc-kijk-naam {font-size: 1.1rem; font-weight: 700; line-height: 1.3;
+      color: var(--text);}
+  .tc-kijk-meta {font-size: .85rem; color: var(--muted); margin: .1rem 0 .35rem;}
+  .tc-kijk-meta .tc-grade {color: var(--gold); font-weight: 700;}
+  .tc-kijk-rij {display: flex; align-items: baseline; gap: .5rem;
+      justify-content: space-between;}
+  .tc-kijk-prijs {font-size: 1.75rem; font-weight: 800; color: var(--text);
+      font-family: var(--cijfers); font-variant-numeric: tabular-nums;
+      letter-spacing: -.03em; white-space: nowrap;}
+  /* "cm" als badge en niet als achtervoegsel achter het bedrag: een
+     Cardmarket-prijs is geen vraagprijs, en dat verschil moet je zien zonder
+     te lezen. Bewust niet rood of goud — het is een herkomst, geen alarm en
+     geen premium. */
+  .tc-kijk-cm {font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted-elev); font-family: inherit;
+      border: 1px solid var(--line); border-radius: 999px;
+      padding: .1rem .35rem; margin-left: .4rem; vertical-align: .4rem;}
+  /* Nakomeling-selectors: zo wint de maat hier van de kleine variant in het
+     mandje zonder dat het van de volgorde in dit bestand afhangt. */
+  .tc-kijk-rij .tc-voorraad, .tc-kijk-rij .tc-laatste, .tc-kijk-rij .tc-op {
+      font-size: .9rem; font-weight: 600; margin: 0; text-align: right;
+      white-space: nowrap;}
+  .st-key-kijk_zoekterm input {font-size: 1.25rem !important;
+      padding: .9rem .75rem !important;}
+
   /* terzijdes (geen beursdag, snelknop zonder kaart): mag je over het hoofd zien */
   .tc-note {font-size: .74rem; color: var(--muted); opacity: .85;
       text-align: center; margin: -.2rem 0 0;}
@@ -481,14 +520,14 @@ def event_id() -> int:
 
 
 TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
-                 "staat", "grade"]
+                 "staat", "grade", "taal"]
 
 
 @st.cache_data(ttl=600, show_spinner="Kaarten laden…")
 def laad_items() -> pd.DataFrame:
     df = lees("""
         SELECT id, onze_naam, officiele_naam, code, set_code, categorie, staat,
-               grade, comp_prijs, prijs_cm, aantal
+               grade, taal, comp_prijs, prijs_cm, aantal
         FROM items ORDER BY officiele_naam NULLS LAST, onze_naam
     """)
     # Voorraad kan negatief zijn (er is meer verkocht dan de inventaris wist);
@@ -536,6 +575,20 @@ def voorraad_klasse(aantal: int) -> str:
     if n <= 0:
         return "tc-op"
     return "tc-laatste" if n == 1 else "tc-voorraad"
+
+
+def laad_items_of_stop() -> pd.DataFrame:
+    """De kaarten, of een nette foutmelding en stoppen.
+
+    Twee schermen hebben de inventaris nodig (invoeren en ZOEK); met één
+    foutpad kan de melding bij een dode verbinding niet uit elkaar lopen."""
+    try:
+        return laad_items()
+    except SQLAlchemyError as e:
+        st.error("Geen verbinding met de database.", icon="🚫")
+        with st.expander("Details"):
+            st.code(str(e))
+        st.stop()
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -732,6 +785,18 @@ def geld(bedrag: float) -> str:
     return f"{float(bedrag):,.2f}".replace(",", "~").replace(".", ",").replace("~", ".")
 
 
+def prijs_label(rij) -> tuple[str, bool]:
+    """(bedrag, is_cm) voor één item.
+
+    Eén plek voor de prijsregel, want verkoop en ZOEK tonen hetzelfde bedrag en
+    moeten hem dus ook hetzelfde labelen. `is_cm` zegt dat dit een
+    Cardmarket-prijs is en geen comp-prijs: bij slabs en een deel van de sealed
+    is er alleen die, en zonder label leest zo'n bedrag als een vraagprijs."""
+    if pd.isna(rij["prijs"]):
+        return "€ ?", False
+    return f"€ {geld(rij['prijs'])}", rij["prijs_bron"] == "cm"
+
+
 def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
                   leeg_tekst: str):
     """Zoekresultaten als knoppen; geeft de aangeklikte rij terug (of None)."""
@@ -740,8 +805,8 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
         for _, r in treffers.head(MAX_RESULTATEN).iterrows():
             # "cm" erachter als het geen comp-prijs is: anders lijkt een
             # Cardmarket-prijs op een afgesproken verkoopprijs.
-            prijs = (f"€ {geld(r['prijs'])}" + (" cm" if r["prijs_bron"] == "cm" else "")
-                     if pd.notna(r["prijs"]) else "€ ?")
+            bedrag, is_cm = prijs_label(r)
+            prijs = bedrag + (" cm" if is_cm else "")
             # Voorraad achteraan: zo zie je vóór het tikken of dit de laatste is.
             detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs,
                                             voorraad_tekst(r["aantal"])] if x)
@@ -753,6 +818,80 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
         if treffers.empty:
             st.caption(leeg_tekst)
     return None
+
+
+def toon_kijken(df: pd.DataFrame):
+    """ZOEK-modus: prijs en voorraad opzoeken, zonder iets vast te leggen.
+
+    Waarvoor dit scherm bestaat: een klant houdt een kaart omhoog en vraagt wat
+    hij kost. Dat ging tot nu toe via VERKOOP — zoeken, de kaart aantikken, en
+    dan met een gevuld mandje weer terug. Eén tik te veel, en precies de tik die
+    per ongeluk een verkoop vastlegt.
+
+    In de resultaten staat daarom **geen enkel interactief element**: geen
+    knoppen, geen prijsvelden, geen mandje. Platte HTML-kaarten. Een knop die
+    niets doet is een belofte die hij niet nakomt, en een knop die wél iets doet
+    hoort hier niet te zijn — dit scherm raakt de database alleen om te lezen.
+
+    De prijs is het grootste element op de kaart: dat is waarvoor je hier staat.
+    Bij een item zonder comp-prijs krijgt het bedrag een `cm`-label, want dat is
+    een Cardmarket-prijs en geen afgesproken vraagprijs — op een beursvloer mag
+    dat verschil niet in de kleine lettertjes staan."""
+    st.text_input("Zoek kaart", key="kijk_zoekterm", placeholder="zoek kaart",
+                  label_visibility="collapsed")
+    st.markdown('<div class="tc-note">alleen opzoeken — er wordt niets '
+                'vastgelegd</div>', unsafe_allow_html=True)
+
+    term = st.session_state.get("kijk_zoekterm") or ""
+    if len(term.strip()) < 2:
+        st.caption("Typ een naam of een stuk van de code — bijvoorbeeld "
+                   "**umbreon**, **215** of **evs**.")
+        return
+
+    treffers = zoek(df, term)
+    if treffers.empty:
+        st.caption("Niets gevonden. Probeer een kortere term, of een stuk van "
+                   "de kaartcode.")
+        return
+
+    zichtbaar = treffers.head(MAX_RESULTATEN_ZOEK)
+    kaarten, ergens_cm = [], False
+    for _, r in zichtbaar.iterrows():
+        bedrag, is_cm = prijs_label(r)
+        ergens_cm = ergens_cm or is_cm
+        # Set-code, taal en staat scheiden gelijknamige kaarten van elkaar: er
+        # liggen veertien Pikachu's, en de klant vraagt naar één ervan.
+        meta = " · ".join(html.escape(str(x)) for x in
+                          [kenmerk(r), r["taal"], r["staat"]] if x)
+        regel = f'<div class="tc-kijk-naam">{html.escape(str(r["naam"]))}</div>'
+        if meta or r["grade"]:
+            regel += f'<div class="tc-kijk-meta">{meta}'
+            # Goud, net als in het mandje: de grade van een slab is het enige
+            # dat zichzelf als premium mag aankondigen.
+            if r["grade"]:
+                voor = " · " if meta else ""
+                regel += (f'<span class="tc-grade">{voor}'
+                          f'{html.escape(str(r["grade"]))}</span>')
+            regel += "</div>"
+        prijs = f'<span class="tc-kijk-prijs">{bedrag}'
+        if is_cm:
+            prijs += '<span class="tc-kijk-cm">cm</span>'
+        prijs += "</span>"
+        voorraad = (f'<span class="{voorraad_klasse(r["aantal"])}">'
+                    f'{voorraad_tekst(r["aantal"])}</span>')
+        kaarten.append(f'<div class="tc-kijk">{regel}'
+                       f'<div class="tc-kijk-rij">{prijs}{voorraad}</div></div>')
+
+    # Eén keer uitleggen, niet per kaart: twintig keer dezelfde voetnoot leest
+    # niemand, en het label op de prijs zelf doet daarna het werk.
+    if ergens_cm:
+        st.markdown('<div class="tc-note">cm = Cardmarket-prijs, géén '
+                    'afgesproken vraagprijs</div>', unsafe_allow_html=True)
+    st.markdown("".join(kaarten), unsafe_allow_html=True)
+    if len(treffers) > MAX_RESULTATEN_ZOEK:
+        st.markdown(f'<div class="tc-note">{MAX_RESULTATEN_ZOEK} van '
+                    f'{len(treffers)} treffers — typ specifieker voor de rest'
+                    f'</div>', unsafe_allow_html=True)
 
 
 def zoek_snelknoppen(df: pd.DataFrame) -> tuple[list, list]:
@@ -1072,8 +1211,11 @@ if totalen is not None:
 
 # Op welk event boeken we? Klein en grijs, maar wél in beeld: op 29-08 liep alles
 # ongemerkt naar het vorige event omdat je nergens kon zien waar het heen ging.
-st.markdown(f'<div class="tc-note">boekt op: {EVENT["naam"]}</div>',
-            unsafe_allow_html=True)
+# In ZOEK blijft deze regel weg: daar wordt niets geboekt, en "boekt op: X" op
+# een kijkscherm is een belofte die het scherm niet doet.
+if st.session_state.get("modus") != "ZOEK":
+    st.markdown(f'<div class="tc-note">boekt op: {EVENT["naam"]}</div>',
+                unsafe_allow_html=True)
 
 # ------------------------------------------------------------------ modus
 
@@ -1082,7 +1224,23 @@ if len(MODI) > 1:
                          label_visibility="collapsed", required=True)
 MODUS = st.session_state["modus"] or "VERKOOP"
 TRADE = MODUS == "TRADE"
+KIJKEN = MODUS == "ZOEK"
 TX_TYPE = "trade" if TRADE else "verkoop"
+
+# ------------------------------------------------------------------ zoekmodus
+# Een eigen scherm, en daarna klaar: alles wat hieronder staat kan schrijven, en
+# in ZOEK hoort niets te kunnen schrijven. Eén `st.stop()` is een hardere
+# garantie dan een handvol `if not KIJKEN`-voorwaarden die iemand later vergeet.
+#
+# Het mandje blijft intact terwijl je hier staat. De aantallen leven in
+# session_state en de bedragen in het mandje-record zelf, dus een uitstapje naar
+# ZOEK en terug laat een half ingetikte verkoop precies zoals hij was.
+if KIJKEN:
+    # Een oude bevestigingsflits hoort hier niet opnieuw op te duiken: "✓
+    # Vastgelegd" op een kijkscherm leest als een verkoop die je net deed.
+    st.session_state["bevestiging"] = None
+    toon_kijken(laad_items_of_stop())
+    st.stop()
 
 if VANDAAG not in EVENT["dagen"]:
     # Klein en grijs: het is een terzijde, geen waarschuwing — de invoer telt gewoon.
@@ -1125,13 +1283,7 @@ if st.session_state["fout"]:
 
 # ------------------------------------------------------------------ kaarten
 
-try:
-    items = laad_items()
-except SQLAlchemyError as e:
-    st.error("Geen verbinding met de database.", icon="🚫")
-    with st.expander("Details"):
-        st.code(str(e))
-    st.stop()
+items = laad_items_of_stop()
 
 # Eén keer ophalen en twee keer gebruiken: de dubbel-check hieronder en het
 # logje onderaan. Scheelt een tweede query op een beursnetwerk dat toch al traag is.
