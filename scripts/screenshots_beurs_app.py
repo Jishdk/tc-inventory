@@ -147,6 +147,19 @@ class Scherm:
         self.typ(term)
         self.klik("pick_", n)
 
+    def tel_zichtbaar(self, wat: str):
+        """Hoeveel ZOEK-kaarten staan er volledig binnen de 844 px?
+
+        De vouwmeting van VASTLEGGEN zegt niets over dit scherm: daar is de
+        vraag niet waar de knop eindigt, maar hoeveel je ziet zonder te vegen."""
+        n = self.pg.evaluate("""() => {
+            const h = window.innerHeight;
+            return [...document.querySelectorAll('.tc-kijk')]
+                .filter(e => e.getBoundingClientRect().bottom <= h).length;
+        }""")
+        self.metingen.append((f"{wat}: {n} kaarten compleet in beeld", None))
+        print(f"    {n} kaarten compleet in beeld — {wat}")
+
     def vouw(self, wat: str):
         """Waar eindigt VASTLEGGEN? De kernflow moet binnen 844 px blijven."""
         el = self.pg.query_selector('[class*="st-key-vastleggen"] button')
@@ -192,9 +205,12 @@ def main():
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=20)
 
-    print("\nvouw-metingen (390x844):")
+    print("\nmetingen (390x844):")
     for wat, px in scherm.metingen:
-        merk = "" if px and px <= 844 else "   <-- onder de vouw"
+        if px is None:          # een telling in plaats van een vouwmeting
+            print(f"        -  {wat}")
+            continue
+        merk = "" if px <= 844 else "   <-- onder de vouw"
         print(f"   {px:>4} px  {wat}{merk}")
 
 
@@ -220,8 +236,9 @@ def draaiboek(s: Scherm):
     # "bl" raakt drie kaarten die het scheidingswerk laten zien: dezelfde naam
     # met een PSA-grade naast een losse GD, plus een product op nul voorraad.
     s.zoek_kijk("bl"); s.shot("8-zoek-gelijknamig-en-uitverkocht")
-    # Browsen: een langere lijst dan verkoop ooit toont.
-    s.zoek_kijk("st"); s.shot("9-zoek-lijst")
+    # Browsen: een langere lijst dan verkoop ooit toont. Meteen de maat nemen —
+    # hoeveel kaarten staan er compleet in beeld zonder te scrollen?
+    s.zoek_kijk("st"); s.shot("9-zoek-lijst"); s.tel_zichtbaar("ZOEK, 5 treffers")
 
     print("screenshots — terug naar verkoop")
     s.pg.mouse.wheel(0, -4000); s.pg.wait_for_timeout(800)

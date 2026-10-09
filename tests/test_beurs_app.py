@@ -29,6 +29,33 @@ logging.disable(logging.WARNING)
 sqlite3.register_adapter(datetime.date, lambda d: d.isoformat())
 sqlite3.register_adapter(datetime.time, lambda t: t.isoformat())
 
+# --- restanten in de elementenboom van streamlit.testing -------------------
+# Eén `at.run()` dekt twee scriptpassages zodra de app `st.rerun()` aanroept —
+# bijvoorbeeld na het vastleggen, dat het mandje leegt. De boom wordt uit de
+# berichten van bééde passages opgebouwd, en een element dat alleen in de eerste
+# passage bestond (de prijsregel van de kaart die je net boekte) blijft op zijn
+# oude pad staan. Zijn widget-state is dan al opgeruimd, en de volgende run
+# klapt eruit met een KeyError op een state die er hoort te zijn.
+#
+# Dat is een artefact van de testharnas, niet van de app: in de browser ruimt
+# Streamlit die elementen wel op. Een node zonder state is per definitie zo'n
+# restant en hoort geen waarde bij te dragen, dus die slaan we over.
+from streamlit.testing.v1 import element_tree as _et  # noqa: E402
+
+_echte_widget_state = _et.get_widget_state
+
+
+def _widget_state_zonder_restanten(node):
+    try:
+        return _echte_widget_state(node)
+    except KeyError:
+        return None
+
+
+_et.get_widget_state = _widget_state_zonder_restanten
+_et.ElementTree.get_widget_states.__globals__["get_widget_state"] = \
+    _widget_state_zonder_restanten
+
 INVENTORY = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(INVENTORY))
 sys.path.insert(0, str(INVENTORY / "src"))
@@ -44,7 +71,7 @@ os.environ["TC_EVENT_LOCATIE"] = "Houten"
 SCHEMA = """
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
-    event_date DATE, location TEXT, type TEXT);
+    event_date DATE, location TEXT, type TEXT, eind_datum DATE);
 CREATE TABLE items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, onze_naam TEXT NOT NULL,
     officiele_naam TEXT, code TEXT, set_code TEXT, categorie TEXT,
@@ -95,6 +122,9 @@ HARDLOPERS = [
     ("Prismatic booster", None, "Sealed", "NM", None, 15.00, None, 52),
     ("Phantasamal Flames sleeved booster", "me02", "Sealed", "NM", None, 14.00, None, 283),
     ("Cosmic Eclipse tins", None, "Sealed", "NM", None, 85.00, None, 4),
+    # Twee soorten tins naast elkaar: precies waarom "tins" als zoekterm geen
+    # knop meer opleverde en er nu twee staan met een eigen term.
+    ("151 tins", None, "Sealed", "NM", None, 55.00, None, 4),
     ("Mega Dream", "m2a", "Sealed", "NM", None, 95.00, None, 24),
     ("Black Bolt", "sv11b", "Sealed", "NM", None, 120.00, None, 0),
 ]
@@ -693,15 +723,19 @@ def snelknoppen_tests(AppTest, db):
     at.run()
 
     labels = [b.label for b in snelknoppen(at)]
-    check(len(labels) == 5, f"vijf van de zes snelknoppen resolven ({len(labels)})")
+    check(len(labels) == 6, f"alle zes de snelknoppen resolven ({len(labels)})")
     check(all(x in " ".join(labels) for x in
-              ("Prismatic", "Sleeved", "Tins", "Mega Dream", "Black Bolt")),
-          f"de knoppen die eenduidig zijn staan er ({labels})")
+              ("Prismatic", "Sleeved", "151 Tin", "Cosmic Tin", "Mega Dream",
+               "Black Bolt")),
+          f"elke knop wijst een kaart aan ({labels})")
     check(not any("Twilight" in lb for lb in labels),
-          "een snelknop zonder kaart in de inventaris verschijnt niet")
+          "Twilight staat niet meer in de lijst — die kaart bestaat niet meer")
     tekst = " ".join(m.value for m in at.markdown)
-    check("Snelknop zonder eenduidige kaart: Twilight (0 treffers)" in tekst,
-          "en wordt wél gemeld, zodat een verouderde lijst opvalt")
+    check("Snelknop zonder eenduidige kaart" not in tekst,
+          "en dus ook geen grijze melding meer onder de rij")
+    check(any("€ 55,00" in lb for lb in labels)
+          and any("€ 85,00" in lb for lb in labels),
+          f"de twee tins zijn aan hun prijs uit elkaar te houden ({labels})")
     check(any("€ 15,00" in lb for lb in labels)
           and any("€ 120,00" in lb for lb in labels),
           f"de prijs staat op de knop ({labels})")
@@ -1132,6 +1166,9 @@ def zoekmodus_tests(AppTest, db):
           f"er staat helemaal geen knop op dit scherm ({[b.key for b in at.button]})")
     check(not any("boekt op:" in m.value for m in at.markdown),
           "geen 'boekt op: <event>' — dit scherm boekt niets")
+    check(dagtotaal(at) == "",
+          f"ook geen dagtotaal-balk: die hoort bij het boeken, en de ruimte gaat "
+          f"naar de resultaten ({dagtotaal(at)!r})")
     check(any("er wordt niets vastgelegd" in m.value for m in at.markdown),
           "het scherm zegt zelf dat er niets wordt vastgelegd")
     botsingen = css_botsingen(at)
@@ -1147,6 +1184,14 @@ def zoekmodus_tests(AppTest, db):
         check(stuk in vmax, f"{stuk!r} staat op de kaart")
     check('class="tc-kijk-prijs"' in kijk_html(at),
           "de prijs staat in het grote prijs-element")
+    stijl = "\n".join(m.value for m in at.markdown if "<style>" in m.value)
+    import re as _re
+    maat = _re.search(r"\.tc-kijk-prijs\s*\{[^}]*font-size:\s*([\d.]+)rem", stijl)
+    check(maat and float(maat.group(1)) >= 2.0,
+          f"en is minstens 2rem groot op de telefoon ({maat.group(1) if maat else '?'}rem)")
+    check(_re.search(r"\.tc-kijk-rij[^{]*\.tc-voorraad[^}]*font-weight:\s*700", stijl)
+          or _re.search(r"\.tc-kijk-rij .tc-voorraad[^}]*700", stijl),
+          "de voorraad staat vet op dezelfde regel als de prijs")
     uitkomst(*kaarten)
 
     kop("Z4.", "Hoe leest een slab zonder comp-prijs?",
@@ -1232,6 +1277,78 @@ def zoekmodus_tests(AppTest, db):
     r = rijen(engine)
     check(r == [], f"transactions is nog steeds leeg (kreeg {len(r)} rijen)")
     uitkomst(f"regels in transactions na de hele ZOEK-sessie: {len(r)}")
+    print()
+
+
+def beursdagen_tests(AppTest, db):
+    """Een beurs die twee dagen duurt mag op dag 2 niet melden dat het geen
+    beursdag is. `events.eind_datum` (migratie 011) stuurt dat nu aan."""
+    import streamlit as st
+    import datetime as _dt
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    vandaag = _dt.date.today()
+    bewaard = {k: os.environ.pop(k, None)
+               for k in ("TC_EVENT_NAAM", "TC_EVENT_DATUM", "TC_EVENT_LOCATIE",
+                         "TC_EVENT_DAGEN")}
+
+    print("\n" + "=" * 72)
+    print("BEURSDAGEN — een beurs van twee dagen")
+    print("=" * 72)
+
+    def melding(at):
+        return any("valt buiten de beursdagen" in m.value for m in at.markdown)
+
+    try:
+        # Dag 1 gisteren, dag 2 vandaag: vandaag hoort er dus bij.
+        with engine.begin() as c:
+            c.execute(text("INSERT INTO events (name, event_date, eind_datum, type) "
+                           "VALUES ('Tweedaagse beurs', :a, :b, 'beurs')"),
+                      {"a": (vandaag - _dt.timedelta(days=1)).isoformat(),
+                       "b": vandaag.isoformat()})
+        st.cache_resource.clear(); st.cache_data.clear()
+        at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+        at.run()
+        kop("D1.", "Tweede dag van een tweedaagse beurs — meldt de app iets?",
+            "nee: vandaag valt binnen event_date t/m eind_datum")
+        # Eerst op een exception controleren: zonder die check leest een app die
+        # helemaal niet rendert als "er staat geen melding", en dat is vals groen.
+        check(not at.exception, f"app rendert zonder exception ({at.exception})")
+        check(not melding(at),
+              "geen 'valt buiten de beursdagen' op dag 2")
+        check(any("boekt op: Tweedaagse beurs" in m.value for m in at.markdown),
+              "en hij boekt gewoon op dat event")
+        uitkomst(f"event {vandaag - _dt.timedelta(days=1)} t/m {vandaag}, "
+                 f"vandaag is {vandaag}")
+
+        # Zonder eind_datum is het weer één dag, en die ligt in het verleden.
+        with engine.begin() as c:
+            c.execute(text("UPDATE events SET eind_datum = NULL "
+                           "WHERE name = 'Tweedaagse beurs'"))
+        st.cache_resource.clear(); st.cache_data.clear()
+        at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+        at.run()
+        kop("D2.", "En zonder eind_datum?",
+            "dan is het een eendaagse beurs van gisteren, en meldt hij het wél")
+        check(melding(at),
+              "het terzijde komt terug zodra de beurs één dag is")
+        uitkomst("eind_datum leeg -> gedrag precies als voorheen")
+
+        # TC_EVENT_DAGEN blijft het noodventiel en wint van de database.
+        os.environ["TC_EVENT_DAGEN"] = vandaag.isoformat()
+        st.cache_resource.clear(); st.cache_data.clear()
+        at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+        at.run()
+        kop("D3.", "Overrulet TC_EVENT_DAGEN de database nog?",
+            "ja — het noodventiel blijft voor gaan")
+        check(not melding(at), "TC_EVENT_DAGEN zet vandaag alsnog als beursdag")
+        uitkomst("secret wint van eind_datum")
+    finally:
+        os.environ.pop("TC_EVENT_DAGEN", None)
+        for k, v in bewaard.items():
+            if v is not None:
+                os.environ[k] = v
     print()
 
 
@@ -1507,6 +1624,7 @@ def main():
     mandje_tests(AppTest, db)
     trade_tests(AppTest, db)
     zoekmodus_tests(AppTest, db)
+    beursdagen_tests(AppTest, db)
     snelknoppen_tests(AppTest, db)
     presets_tests(AppTest, db)
     nogmaals_tests(AppTest, db)

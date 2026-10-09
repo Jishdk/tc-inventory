@@ -76,13 +76,20 @@ MAX_RESULTATEN_ZOEK = 20
 # verkeerd product in het mandje is erger dan een knop die er niet is. Welke er
 # afvielen staat in een grijze regel onder de rij, zodat een verouderde lijst
 # opvalt in plaats van stil te verdwijnen.
+# Opnieuw geijkt op de v7 van 09-10. Twee dingen veranderd:
+# - "twilight masquerade booster" staat niet meer in de inventaris en is eruit.
+#   De knop verscheen toch al niet; nu verdwijnt ook de grijze melding eronder.
+# - "tins" raakte er twee (151 en Cosmic Eclipse) en gaf daarom géén knop. De
+#   verkoophistorie wijst geen favoriet aan — van allebei is er één verkocht —
+#   dus worden het twee knoppen met een eigen zoekterm in plaats van een keuze
+#   die we niet kunnen onderbouwen.
 SNELKNOPPEN = [
     {"knop": "Prismatic", "zoek": "prismatic booster"},
-    {"knop": "Twilight", "zoek": "twilight masquerade booster"},
     {"knop": "Sleeved", "zoek": "sleeved booster"},
-    {"knop": "Tins", "zoek": "tins"},
-    {"knop": "Mega Dream", "zoek": "mega dream"},
     {"knop": "Black Bolt", "zoek": "black bolt"},
+    {"knop": "Mega Dream", "zoek": "mega dream"},
+    {"knop": "151 Tin", "zoek": "151 tins"},
+    {"knop": "Cosmic Tin", "zoek": "cosmic eclipse tins"},
 ]
 SNELKNOPPEN_PER_RIJ = 3   # drie naast elkaar past op 390 px; Streamlit wrapt niet zelf
 KORTING = 10              # percentage van de "comp −10%"-knop
@@ -222,6 +229,10 @@ BASIS_CSS = """
      st-key-resultaten zit óp het verticale blok, niet eromheen — een
      nakomeling-selector vindt hier dus niets. */
   div.st-key-resultaten {gap: .4rem;}
+  /* De mandje-container is leeg zolang er niets in zit en mag dan geen ruimte
+     innemen; de regels erbinnen houden dezelfde tussenruimte als voorheen. */
+  div.st-key-mandje_lijst {gap: .75rem;}
+  div.st-key-mandje_lijst:empty {display: none;}
   [class*="st-key-pick_"] button {min-height: 3.5rem; padding: .6rem .9rem;
       background: var(--card); border: 1px solid var(--line);
       border-left: 4px solid var(--elev); border-radius: var(--r-sm);}
@@ -361,16 +372,20 @@ BASIS_CSS = """
      zoekresultaat en de mandje-regel. */
   .tc-kijk {background: var(--card); border: 1px solid var(--line);
       border-left: 4px solid var(--elev); border-radius: var(--r-sm);
-      padding: .6rem .75rem .55rem; margin-bottom: .45rem;}
-  .tc-kijk-naam {font-size: 1.1rem; font-weight: 700; line-height: 1.3;
+      padding: .45rem .7rem .4rem; margin-bottom: .4rem;}
+  .tc-kijk-naam {font-size: 1.02rem; font-weight: 700; line-height: 1.25;
       color: var(--text);}
-  .tc-kijk-meta {font-size: .85rem; color: var(--muted); margin: .1rem 0 .35rem;}
+  .tc-kijk-meta {font-size: .8rem; color: var(--muted); margin: 0 0 .15rem;
+      line-height: 1.3;}
   .tc-kijk-meta .tc-grade {color: var(--gold); font-weight: 700;}
   .tc-kijk-rij {display: flex; align-items: baseline; gap: .5rem;
       justify-content: space-between;}
-  .tc-kijk-prijs {font-size: 1.75rem; font-weight: 800; color: var(--text);
+  /* Het bedrag is waarvoor je hier staat: zo groot als op één regel naast de
+     voorraad past. Alles eromheen is juist krapper gezet, zodat een kaart
+     ondanks dit formaat niet hoger wordt en er meer in beeld blijven. */
+  .tc-kijk-prijs {font-size: 2.1rem; font-weight: 800; color: var(--text);
       font-family: var(--cijfers); font-variant-numeric: tabular-nums;
-      letter-spacing: -.03em; white-space: nowrap;}
+      letter-spacing: -.04em; white-space: nowrap; line-height: 1.15;}
   /* "cm" als badge en niet als achtervoegsel achter het bedrag: een
      Cardmarket-prijs is geen vraagprijs, en dat verschil moet je zien zonder
      te lezen. Bewust niet rood of goud — het is een herkomst, geen alarm en
@@ -382,7 +397,7 @@ BASIS_CSS = """
   /* Nakomeling-selectors: zo wint de maat hier van de kleine variant in het
      mandje zonder dat het van de volgorde in dit bestand afhangt. */
   .tc-kijk-rij .tc-voorraad, .tc-kijk-rij .tc-laatste, .tc-kijk-rij .tc-op {
-      font-size: .9rem; font-weight: 600; margin: 0; text-align: right;
+      font-size: .95rem; font-weight: 700; margin: 0; text-align: right;
       white-space: nowrap;}
   .st-key-kijk_zoekterm input {font-size: 1.25rem !important;
       padding: .9rem .75rem !important;}
@@ -437,14 +452,14 @@ INSERT INTO events (name, event_date, location, type)
 VALUES (:name, :event_date, :location, 'beurs')
 ON CONFLICT (name) DO UPDATE SET
     event_date = EXCLUDED.event_date, location = EXCLUDED.location
-RETURNING id, name, event_date, location
+RETURNING id, name, event_date, location, eind_datum
 """)
 
 # Zonder TC_EVENT_NAAM boeken we op het laatst aangemaakte event. Op event_date
 # sorteren en pas daarna op id: twee beurzen op dezelfde dag komen dan alsnog in
 # de volgorde binnen waarin ze zijn aangemaakt.
 HUIDIG_EVENT = text("""
-SELECT id, name, event_date, location FROM events
+SELECT id, name, event_date, location, eind_datum FROM events
 ORDER BY event_date DESC, id DESC LIMIT 1
 """)
 
@@ -471,6 +486,34 @@ TEL_AFGEBOEKT = text("""
 SELECT COUNT(*) FROM transactions
 WHERE id IN :ids AND event_id = :event_id AND afgeboekt_op IS NOT NULL
 """).bindparams(bindparam("ids", expanding=True))
+
+
+def _als_datum(waarde) -> date | None:
+    """Postgres levert een `date`, SQLite (de testdatabase) een string. Beide
+    moeten hier een datum worden, anders klapt de rekenpartij hieronder eruit."""
+    if waarde is None or isinstance(waarde, date):
+        return waarde
+    try:
+        return date.fromisoformat(str(waarde)[:10])
+    except ValueError:
+        return None
+
+
+def _reeks(start: date | None, eind: date | None) -> set[date]:
+    """Alle dagen van een beurs: start t/m eind_datum, grenzen meegeteld.
+
+    Een tweedaagse beurs stond tot nu toe alleen met zijn eerste dag in de
+    database, en op dag 2 meldde de app daarom dat het geen beursdag was. Dat
+    klopte niet en het zaaide twijfel op het verkeerde moment. `eind_datum`
+    (migratie 011) is leeg bij een eendaagse beurs — dan is dit één datum, net
+    als voorheen."""
+    start, eind = _als_datum(start), _als_datum(eind)
+    if start is None:
+        return set()
+    if eind is None or eind <= start:
+        return {start}
+    return {date.fromordinal(d)
+            for d in range(start.toordinal(), eind.toordinal() + 1)}
 
 
 def _datums(waarde: str | None) -> set[date]:
@@ -510,7 +553,11 @@ def event() -> dict:
             rij = conn.execute(HUIDIG_EVENT).one_or_none()
             if rij is None:
                 return {}
-    dagen = _datums(secret("TC_EVENT_DAGEN")) or {rij.event_date}
+    # TC_EVENT_DAGEN houdt voorrang: dat is het noodventiel voor een beurs met
+    # een gat ertussen, of om een losse dag toe te voegen zonder de database aan
+    # te raken. Staat die er niet, dan leidt de app de dagen af uit het event.
+    dagen = (_datums(secret("TC_EVENT_DAGEN"))
+             or _reeks(rij.event_date, getattr(rij, "eind_datum", None)))
     return {"id": rij.id, "naam": rij.name, "datum": rij.event_date,
             "locatie": rij.location, "dagen": dagen}
 
@@ -1185,10 +1232,17 @@ if not EVENT:
              "`TC_EVENT_NAAM` in de secrets/omgeving.", icon="📍")
     st.stop()
 
-try:
-    totalen = dagtotalen(event_id(), VANDAAG, st.session_state["tx_versie"])
-except SQLAlchemyError:
-    totalen = None      # database plat: de foutmelding komt hieronder al
+# In ZOEK slaan we de dagtotaal-balk over. Hij hoort bij het boeken, en dit
+# scherm boekt niet — bovendien levert het de 45 px op waarmee het eerste
+# zoekresultaat compleet in beeld komt in plaats van half. Ook de query zelf
+# blijft achterwege; dat scheelt een rondje over een beursnetwerk.
+if st.session_state.get("modus") == "ZOEK":
+    totalen = None
+else:
+    try:
+        totalen = dagtotalen(event_id(), VANDAAG, st.session_state["tx_versie"])
+    except SQLAlchemyError:
+        totalen = None  # database plat: de foutmelding komt hieronder al
 
 if totalen is not None:
     # Verkoop in euro's, trades in aantallen: bij een trade is het bedrag alleen
@@ -1357,9 +1411,16 @@ if len(mandje) > 1 or (TRADE and mandje):
                 f'{"kaart" if len(mandje) == 1 else "kaarten"}</div>',
                 unsafe_allow_html=True)
 
+# Eén vaste container om de regels heen, ook als het mandje leeg is. Zonder dat
+# vaste plekje blijven de regels van de vórige run na een rerun op hun oude
+# positie in de elementenboom staan — na het vastleggen bleven het prijsveld en
+# de stepper van de zojuist geboekte kaart daar hangen, en dan telt een volgende
+# invoer op bij iets wat er al niet meer hoort te zijn. De zoekresultaten hebben
+# om dezelfde reden al zo'n container.
+mandje_lijst = st.container(key="mandje_lijst")
 for regel in mandje:
     rid = regel["rid"]
-    with st.container(key=f"regel_{rid}"):
+    with mandje_lijst.container(key=f"regel_{rid}"):
         # Naam links, weg-knop rechts. Daaronder de bedieningsregel: het aantal
         # als kleine stepper náást de prijs, zodat een mandje van twee kaarten
         # nog steeds boven de vouw past op een telefoon.
