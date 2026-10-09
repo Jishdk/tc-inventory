@@ -254,6 +254,31 @@ volgt de terugval en toont `boekt op: Cardmania XXL Rosmalen` (live gecheckt).
 | negatief / zonder comp / zonder prijs | 0 / 35 / 2 |
 | Excel ↔ database | **0 afwijkingen op 840 rijen** |
 
+### Het bestand is op 09-10 "super clean" gemaakt — en dat verandert de omgang ermee
+
+`scripts/superclean_v7.py` heeft de 232 naamloze rijen (leeggemaakte slabs,
+dubbelingen, kopregels én alle sjabloonrijen) **fysiek verwijderd**: de 840
+kaarten staan aaneengesloten op rij 2–841 en `items.bron_rij` loopt daar weer
+mee gelijk. Gevolgen voor wie hierna aan het bestand werkt:
+
+- **De voorgevulde sjabloonrijen onder de lijst bestaan niet meer.** Een nieuwe
+  kaart krijgt dus geen formules cadeau — kopieer een bestaande rij, of laat
+  `scripts/nieuw_via_app_naar_v7.py` (v3-branch) het doen; die trekt formules
+  zelf door. De dropdowns (Taal/Categorie/Staat/…) werken wél door tot rij 1200.
+- **Gedeelde formules zijn uitgevouwen** naar volledige formules per cel; elke
+  rijformule verwijst alleen naar de eigen rij. Rijen verwijderen of invoegen
+  kan daardoor zonder dat formulebereiken meeschuiven.
+- De `#REF!` die sinds eind augustus in L846 huisde (Pikachu grey felt hat
+  PSA 9) en via `SUM(L:L)` het Dashboard-veld "Totaal verkocht" sloopte, is
+  hersteld. Blad1 (een PSA-prijsladdertje, nergens naar verwezen) is verwijderd
+  maar staat in `data/backup/InventoryTC_20261009_2012_voor_superclean.xlsx`.
+- Alle caches (rijformules én Dashboard) zijn herrekend: het bestand klopt ook
+  zonder dat Excel er ooit langs is geweest — en dus ook in de Drive-preview.
+
+Eindstand gecontroleerd: 840 kaarten · 1458 stuks · €152.624,70 cm /
+€166.273,55 comp · Totaal verkocht 0 · geen enkele foutwaarde · Excel ↔
+database rij-voor-rij 0 afwijkingen.
+
 ### De v7-telling van 09-10: alle slabs opnieuw ingevoerd
 
 Het team heeft alle slabs opnieuw onderaan gezet (82 regels). De oude
