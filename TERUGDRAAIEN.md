@@ -1,13 +1,35 @@
 # Terugdraaien van de beurs-app
 
-Voor als de live app stuk is en het snel moet. Geschreven op 22-08-2026, toen v2
-live ging.
+Voor als de live app stuk is en het snel moet. Geschreven op 22-08-2026 toen v2
+live ging; bijgewerkt op 09-10-2026, de avond vóór Cardmania XXL Rosmalen.
 
 | | |
 |---|---|
-| **Laatste stabiele commit** | `803367b` — *Notitie bij de derde Shining Magikarp (PSA 5 slab)* |
-| Wat er nu live staat | `3893e0d` — *Beurs-app: huisstijl eroverheen* |
+| **Laatste stabiele commit** | `d1c72d4` — *ZOEK-modus* (v2 + event-fix + ZOEK, 289 checks groen) |
+| Wat er nu live staat | `9b338d2` — app laatst gewijzigd in `185e7eb` (snelknoppen, eind_datum, ZOEK-maat) |
 | Repo die de live app voedt | `github.com/Jishdk/tc-inventory`, branch **main** |
+
+⚠️ **Sinds 31-08 geldt: draai nooit verder terug dan `f37402e`.** Daarvóór zat
+het event hard in de code (`EVENT_NAAM = "Cardmaniacs Nijmegen…"`), en dan boekt
+alle invoer stilletjes op de verkeerde beurs — precies wat er op 29-08 misging.
+Dat raakt ook optie 1 hieronder: **`beurs_app_stable.py` draagt dat hardgecodeerde
+event nog**. Gebruik die noodgreep alleen als je het niet erg vindt dat de regels
+achteraf verlegd moeten worden, en noteer dan dat de invoer op het oude event
+staat. De nette snelle terugval is optie 1b.
+
+## 1b. App terug naar de laatste stabiele commit (aanbevolen)
+
+```bash
+git checkout main && git pull
+git checkout d1c72d4 -- beurs_app.py
+git commit -am "Beurs-app terug op d1c72d4 (ZOEK, stabiel)"
+git push origin main
+```
+
+Dit houdt het configureerbare event (en dus `boekt op:` onderaan het dagtotaal),
+verliest alleen de snelknop-herijking en de ZOEK-maatvoering van `185e7eb`, en
+werkt gewoon op de huidige database — `eind_datum` (migratie 011) is additief en
+de oudere query leest er simpelweg omheen.
 
 Streamlit Cloud herstart automatisch bij een push naar `main`. Alle commando's
 hieronder gaan ervan uit dat je in `~/projects/tc/inventory` staat en op `main`
