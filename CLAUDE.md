@@ -239,6 +239,46 @@ Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de scr
 - Kleinigheid: de testid van een segmented control is `stButtonGroup` in Streamlit 1.60,
   niet `stSegmentedControl`. Beide staan in de CSS zodat een upgrade goed gaat.
 
+## Beurs 10-11 oktober 2026 — Cardmania XXL Rosmalen (voorbereid 09-10)
+
+Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de app
+leest de beursdagen nu uit het event zelf). Geen `TC_EVENT_NAAM` gezet; de app
+volgt de terugval en toont `boekt op: Cardmania XXL Rosmalen` (live gecheckt).
+
+### Eindstand vooravond (09-10, geïmporteerd en rij-voor-rij gecontroleerd)
+
+| | |
+|---|---|
+| `items` | **840**, 1458 stuks |
+| voorraadwaarde (cm) | **€152.624,70** · verkoopwaarde €166.273,55 |
+| negatief / zonder comp / zonder prijs | 0 / 35 / 2 |
+| Excel ↔ database | **0 afwijkingen op 840 rijen** |
+
+### De v7-telling van 09-10: alle slabs opnieuw ingevoerd
+
+Het team heeft alle slabs opnieuw onderaan gezet (82 regels). De oude
+slab-regels hoger in het bestand zijn leeggemaakt (80; **Pikachu grey felt hat
+PSA 9 blijft** — die zit niet in de nieuwe batch), plus 8 dubbele singles
+(bewust aantal=1, niet opgeteld — keuze team) en 2 kopregels ("Japanse
+Singles", "Slabs") die als kaart meededen. Gereedschap:
+`scripts/opschonen_v7.py` (XML-niveau, formules intact).
+⚠️ **De opschoning is één keer overschreven**: het bestand stond in Excel open
+vanaf vóór de oplevering en een latere opslag zette de ruwe versie terug
+(+€28k dubbel geteld). Herkenbaar aan het slab-aantal: **83 is goed, 163 is de
+dubbele**. Na herstel opnieuw opgeschoond en geïmporteerd.
+
+- `data/v7_slabs_nalopen.csv` — 47 leeggemaakte slabs zonder tegenhanger in de
+  nieuwe batch, verrijkt met verkoophistorie (`scripts/verrijk_slablijst.py`):
+  27 nooit verkocht/€13.840 (fysiek nalopen), 14 verkocht, 6 twijfel.
+- 27 transacties verloren hun `item_id` (kaarten niet meer in v7); reden staat
+  per regel in `opschoon_notitie`, omzet ongewijzigd.
+- **Het bestand heet voortaan `Inventory TC.xlsx`** (Windows-map, voor de
+  Drive; zonder groen/oranje markeringen). `TC_Inventaris_v7.xlsx` staat er
+  identiek naast omdat de importer die naam leest — wordt er een nieuwe versie
+  aangeleverd, werk dan beide bij of pas `src/import_inventory_v3.py` aan.
+- Nog te compen (12, gerapporteerd aan team): o.a. PIkachu van Gogh Sealed
+  (cm 640), Mew (flying) (cm 290), Gengar 20/62 en Eevee Chinees (geen prijs).
+
 ## Beurs 29 augustus 2026 — Collectable World Houten
 
 Event **26 "Collectable World Houten"** (`events.id = 26`, 29-08, Houten). Cyclus gedraaid
