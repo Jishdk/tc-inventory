@@ -32,12 +32,24 @@ SHEET = "xl/worksheets/sheet2.xml"      # tabblad Inventaris
 KOLOMMEN = [chr(c) for c in range(ord("A"), ord("S") + 1)]
 
 
+# ⚠️ De kwantoren hieronder zijn lui ([^>]*?), en dat is geen stijl maar een
+# bugfix: een gulzige [^>]* eet ook de '/' van een self-closing cel op, waarna
+# het (?:/>|>…)-alternatief de '>' pakt en de match over de celgrens heen
+# doorschiet tot de </c> van een vólgende cel. Dat slokte cellen op, plantte
+# een gedeelde-formule-verwijzing in de verkeerde kolom en zette er bij het
+# terugschrijven een dubbele celreferentie neer — precies waar Excel zijn
+# herstel-dialoog voor trekt.
+CEL_RE = re.compile(r'<c\b[^>]*?(?:/>|>.*?</c>)', re.S)
+REF_RE = re.compile(r'\br="([A-Z]+)(\d+)"')
+
+
 def _cellen(rij_xml: str) -> dict:
     """{kolomletter: volledige <c .../>-tekst} voor één rij."""
     uit = {}
-    for m in re.finditer(r'<c\b[^>]*\br="([A-Z]+)(\d+)"[^>]*(?:/>|>.*?</c>)',
-                         rij_xml, re.S):
-        uit[m.group(1)] = m.group(0)
+    for m in CEL_RE.finditer(rij_xml):
+        ref = REF_RE.search(m.group(0))
+        if ref:
+            uit[ref.group(1)] = m.group(0)
     return uit
 
 
@@ -106,7 +118,26 @@ def bewerk(bron: Path, doel: Path, *, leeg: set, aantallen: dict, notities: dict
             geraakt["notitie"] += 1
         return rij_xml
 
-    xml = re.sub(r'<row\b[^>]*\br="(\d+)"[^>]*>.*?</row>', per_rij, xml, flags=re.S)
+    def bewaakt(m):
+        voor, nr = m.group(0), int(m.group(1))
+        na = per_rij(m)
+        if na is voor or na == voor:
+            return na
+        # Integriteit: geen dubbele celreferenties, geen cellen kwijt (behalve
+        # waar leeg_cel bewust een waarde schrapte), kolommen oplopend.
+        refs = [REF_RE.search(c.group(0)).group(1)
+                for c in CEL_RE.finditer(na) if REF_RE.search(c.group(0))]
+        if len(refs) != len(set(refs)):
+            raise RuntimeError(f"rij {nr}: dubbele celreferentie na bewerking")
+        if [k for k in refs if k in KOLOMMEN] != sorted(
+                (k for k in refs if k in KOLOMMEN), key=KOLOMMEN.index):
+            raise RuntimeError(f"rij {nr}: kolommen niet meer oplopend")
+        if set(_cellen(voor)) - set(refs):
+            raise RuntimeError(f"rij {nr}: cellen kwijtgeraakt: "
+                               f"{sorted(set(_cellen(voor)) - set(refs))}")
+        return na
+
+    xml = re.sub(r'<row\b[^>]*\br="(\d+)"[^>]*>.*?</row>', bewaakt, xml, flags=re.S)
 
     # Excel het Dashboard laten herrekenen zodra het bestand opengaat.
     wb = zin.read("xl/workbook.xml").decode("utf-8")

@@ -262,6 +262,14 @@ PSA 9 blijft** — die zit niet in de nieuwe batch), plus 8 dubbele singles
 (bewust aantal=1, niet opgeteld — keuze team) en 2 kopregels ("Japanse
 Singles", "Slabs") die als kaart meededen. Gereedschap:
 `scripts/opschonen_v7.py` (XML-niveau, formules intact).
+⚠️ **De eerste versie van dat script maakte corrupte bestanden** — een gulzige
+`[^>]*` in de cel-regex schoot over self-closing cellen heen: dubbele
+celreferenties, opgeslokte cellen en een formule-verwijzing in de verkeerde
+kolom. Excel trok daar zijn herstel-dialoog op en sloopte vervolgens formules.
+Gerepareerd op 09-10 (luie kwantoren + een integriteitsbewaking in `bewerk()`
+die dubbele refs, kwijtgeraakte cellen en kolomvolgorde afvangt). Een bestand
+dat uit de kapotte versie kwam is te herkennen aan een dubbele `r="J…"` in
+sheet2.xml; alle opgeleverde bestanden zijn daarna opnieuw gebouwd.
 ⚠️ **De opschoning is één keer overschreven**: het bestand stond in Excel open
 vanaf vóór de oplevering en een latere opslag zette de ruwe versie terug
 (+€28k dubbel geteld). Herkenbaar aan het slab-aantal: **83 is goed, 163 is de
