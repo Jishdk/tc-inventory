@@ -302,6 +302,18 @@ Aantal+1 op de bestaande rij; de importer houdt ze nu als 2e voorkomen uit
 elkaar. "Scizor 30th" (rij 841) draagt dezelfde code 108/115 als de Scizor die
 vandaag voor €110 wegging. Turtonator (rij 131) heeft geen cm-prijs.
 
+**Correcties later die avond** (`scripts/correcties_v7_rosmalen_dag1.py`):
+Eevee swsh087, Mega Gengar 269/217, Articuno 161/159 en Frogadier 089/086
+waren extra exemplaren → Aantal +1/+1/+2/+1 op de bestaande rij, de nieuwe
+rijen (842/858/859/873) leeggemaakt. **Niet samengevoegd:** Lucario SWSH291,
+Mewtwo SWSH229 en Alakazam 9 — de nieuwe rij draagt `Promo = Sealed`, de
+bestaande is een losse single (Lucario zelfs `Promo = Ja`); dat zijn twee
+producten. Scizor 30th (rij 841) heeft kolom Set = "30th" — let op: de
+importer leest die kolom niet, het onderscheid in de app zit in de naam.
+De poker-slabs van #719 (K/Q/J ruit, €1.000) staan **niet in v7**; de regel
+blijft vrij ingevoerd en ongekoppeld tot het team ze aanwijst. Stand daarna:
+**872 items, 1501 stuks, €154.407,20 cm / €171.703 comp**, 0 afwijkingen.
+
 **App (main, gepusht):** het dagtotaal toont bij een meerdaagse beurs het
 **weekend-/beurstotaal** met daaronder een regel per beursdag (`za 10-10:
 verkoop … · trades …`); eendaags blijft het één `Vandaag:`-regel. Als dubbel
