@@ -143,7 +143,9 @@ def dagtotaal(at) -> str:
     balk = [m.value for m in at.markdown if 'class="tc-dag"' in m.value]
     if not balk:
         return ""
-    plat = re.sub(r"<[^>]+>", "", balk[0]).replace("&nbsp;", " ")
+    # Bij een meerdaagse beurs staan er meerdere regels in de balk; die komen
+    # hier met " | " ertussen terug, zodat een check per regel leesbaar blijft.
+    plat = re.sub(r"<[^>]+>", "", balk[0].replace("<br>", " | ")).replace("&nbsp;", " ")
     return re.sub(r"\s+", " ", plat).strip()
 
 
@@ -1321,6 +1323,45 @@ def beursdagen_tests(AppTest, db):
               "en hij boekt gewoon op dat event")
         uitkomst(f"event {vandaag - _dt.timedelta(days=1)} t/m {vandaag}, "
                  f"vandaag is {vandaag}")
+
+        # --- dagtotaal per beursdag, met het totaal erboven -----------------
+        gisteren = vandaag - _dt.timedelta(days=1)
+        weekdag = ["ma", "di", "wo", "do", "vr", "za", "zo"]
+        kop_totaal = ("Weekend" if all(d.weekday() >= 5 for d in (gisteren, vandaag))
+                      else "Beurs")
+        regels = dagtotaal(at).split(" | ")
+        kop("D1b.", "Toont de balk bij een tweedaagse beurs het totaal én elke dag?",
+            "ja: eerst het weekend-/beurstotaal, daaronder dag 1 en dag 2")
+        check(len(regels) == 3, f"drie regels: totaal + twee dagen ({regels})")
+        check(regels[0] == f"{kop_totaal}: verkoop € 0,00 · trades: 0",
+              f"bovenaan het totaal over beide dagen ({regels[0]!r})")
+        check(regels[1] == f"{weekdag[gisteren.weekday()]} {gisteren:%d-%m}: "
+                           f"verkoop € 0,00 · trades: 0",
+              f"dan dag 1 met weekdag en datum ({regels[1]!r})")
+        check(regels[2] == f"{weekdag[vandaag.weekday()]} {vandaag:%d-%m}: "
+                           f"verkoop € 0,00 · trades: 0",
+              f"en dag 2 ({regels[2]!r})")
+        # Een verkoop van vandaag landt op de regel van vandaag én in het totaal;
+        # dag 1 blijft op nul.
+        kies(at, "umbreon vmax")
+        zet_prijs(at, 0, 100.0)
+        at.button(key="vastleggen").click().run()
+        regels = dagtotaal(at).split(" | ")
+        check(regels[0].startswith(f"{kop_totaal}: verkoop € 100,00")
+              and regels[2].startswith(f"{weekdag[vandaag.weekday()]} {vandaag:%d-%m}: "
+                                       f"verkoop € 100,00")
+              and regels[1].endswith("verkoop € 0,00 · trades: 0"),
+              f"verkoop telt op de dag van invoer én in het totaal ({regels})")
+        # Een regel die bij het opschonen als dubbel is gemarkeerd telt niet mee.
+        with engine.begin() as c:
+            c.execute(text("UPDATE transactions SET is_dubbel = 1 "
+                           "WHERE id = (SELECT max(id) FROM transactions)"))
+        st.cache_data.clear()
+        at.run()
+        regels = dagtotaal(at).split(" | ")
+        check(regels[0] == f"{kop_totaal}: verkoop € 0,00 · trades: 0",
+              f"een als dubbel gemarkeerde regel valt uit het totaal ({regels[0]!r})")
+        uitkomst(f"balk: {dagtotaal(at)}")
 
         # Zonder eind_datum is het weer één dag, en die ligt in het verleden.
         with engine.begin() as c:

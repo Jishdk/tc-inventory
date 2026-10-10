@@ -76,14 +76,16 @@ if pad:
     return str(map_)
 
 
-def start_app(db_pad: str, libpad: str | None) -> subprocess.Popen:
+def start_app(db_pad: str, libpad: str | None, dagen: str | None = None) -> subprocess.Popen:
     env = {**os.environ}
     env["TC_SHOT_DB"] = db_pad
     # Alleen om de aanwezigheidscheck in de app te passeren; get_engine is gepatcht.
     env["SUPABASE_DB_URL"] = "postgresql://u:p@localhost:5432/x"
     env["TC_EVENT_NAAM"] = "Testbeurs screenshots"
     env["TC_EVENT_DATUM"] = "2026-08-29"
-    env["TC_EVENT_DAGEN"] = datetime.date.today().isoformat()
+    # Eén dag (vandaag) tenzij `--dagen` iets anders zegt; met twee dagen laat
+    # de balk bovenaan het weekend-totaal plus een regel per beursdag zien.
+    env["TC_EVENT_DAGEN"] = dagen or datetime.date.today().isoformat()
     env["PYTHONPATH"] = sitecustomize() + os.pathsep + env.get("PYTHONPATH", "")
     env.pop("TC_BEURS_PIN", None)
     if libpad:
@@ -173,6 +175,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--uit", default=str(INVENTORY / "screenshots"))
     p.add_argument("--prefix", default="zoek")
+    p.add_argument("--dagen", default=None,
+                   help="beursdagen als komma-gescheiden ISO-datums (default: vandaag)")
     args = p.parse_args()
     uit = Path(args.uit)
     uit.mkdir(parents=True, exist_ok=True)
@@ -189,7 +193,7 @@ def main():
     if libpad:
         os.environ["LD_LIBRARY_PATH"] = libpad + os.pathsep + os.environ.get("LD_LIBRARY_PATH", "")
 
-    proc = start_app(db_pad, libpad)
+    proc = start_app(db_pad, libpad, args.dagen)
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as pw:

@@ -206,6 +206,7 @@ BASIS_CSS = """
   .tc-dag b {font-weight: 700; color: var(--text);
       font-family: var(--cijfers); font-variant-numeric: tabular-nums;
       letter-spacing: -.02em;}
+  .tc-dag .tc-dag-dag {font-size: .82rem;}
 
   /* ---- snelknoppen: kleine cards met het 4px-frame als accent ---------- */
   [class*="st-key-snel_"] button {min-height: 3.4rem; padding: .35rem .5rem;
@@ -651,22 +652,68 @@ def laatste_transacties(eid: int, versie: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=20, show_spinner=False)
-def dagtotalen(eid: int, dag: date, versie: int) -> dict[str, dict]:
-    """Som én aantal per type voor één dag. `versie` breekt de cache open na elke
-    invoer, zodat de balk bovenaan meteen meeloopt met wat je net hebt vastgelegd.
+def dagtotalen(eid: int, versie: int) -> dict[date, dict[str, dict]]:
+    """Som én aantal per type, per dag, voor het hele event. `versie` breekt de
+    cache open na elke invoer, zodat de balk bovenaan meteen meeloopt met wat je
+    net hebt vastgelegd.
 
     Voor trades telt niet het bedrag maar het aantal *afspraken*: vier kaarten de
     deur uit tegen wat kaarten terug is één trade, geen vier. Regels van dezelfde
-    trade delen een group_id; een losse regel zonder groep telt als één."""
+    trade delen een group_id; een losse regel zonder groep telt als één.
+
+    Regels die bij het opschonen als dubbel zijn gemarkeerd (`is_dubbel`) tellen
+    niet mee: die zijn al beoordeeld, en een dagtotaal dat ze meetelt staat
+    structureel te hoog."""
     df = lees("""
-        SELECT t.type,
+        SELECT t.datum, t.type,
                COALESCE(SUM(t.bedrag), 0) AS som,
                COUNT(DISTINCT COALESCE(t.group_id, 'tx-' || t.id)) AS groepen
-        FROM transactions t WHERE t.event_id = :eid AND t.datum = :dag
-        GROUP BY t.type
-    """, {"eid": eid, "dag": dag})
-    return {str(r["type"]): {"som": float(r["som"]), "groepen": int(r["groepen"])}
-            for _, r in df.iterrows()}
+        FROM transactions t
+        WHERE t.event_id = :eid AND NOT COALESCE(t.is_dubbel, FALSE)
+        GROUP BY t.datum, t.type
+    """, {"eid": eid})
+    uit: dict[date, dict[str, dict]] = {}
+    for _, r in df.iterrows():
+        dag = pd.to_datetime(r["datum"]).date()
+        uit.setdefault(dag, {})[str(r["type"])] = {
+            "som": float(r["som"]), "groepen": int(r["groepen"])}
+    return uit
+
+
+WEEKDAG = ["ma", "di", "wo", "do", "vr", "za", "zo"]
+
+
+def totaalregel(kop: str, totalen: dict[str, dict]) -> str:
+    """Eén regel van de balk: 'Vandaag: verkoop € 430,00 · trades: 2 (cash +€ 35,00)'.
+
+    Verkoop in euro's, trades in aantallen: bij een trade is het bedrag alleen
+    het verschil dat er cash bij komt of af gaat, dus een som van euro's zou
+    onderschatten hoeveel er die dag over tafel is gegaan."""
+    verkoop = totalen.get("verkoop", {}).get("som", 0.0)
+    trades = totalen.get("trade", {})
+    n_trades, cash = trades.get("groepen", 0), trades.get("som", 0.0)
+    cash_teken = "−" if cash < 0 else "+"
+    regel = (f'{kop}: verkoop <b>€ {geld(verkoop)}</b> &nbsp;·&nbsp; '
+             f'trades: <b>{n_trades}</b>')
+    if n_trades:
+        regel += f' (cash {cash_teken}€ {geld(abs(cash))})'
+    # Inkoop kan de app niet meer boeken; wat er uit een oudere versie of uit de
+    # WhatsApp-import staat, laten we wél zien — anders lijkt de dag onvolledig.
+    inkoop = totalen.get("inkoop", {}).get("som", 0.0)
+    if inkoop:
+        regel += f' &nbsp;·&nbsp; inkoop <b>€ {geld(inkoop)}</b>'
+    return regel
+
+
+def som_totalen(per_dag: dict[date, dict[str, dict]]) -> dict[str, dict]:
+    """Alle dagen bij elkaar opgeteld, per type."""
+    uit: dict[str, dict] = {}
+    for totalen in per_dag.values():
+        for soort, t in totalen.items():
+            u = uit.setdefault(soort, {"som": 0.0, "groepen": 0})
+            u["som"] += t["som"]
+            u["groepen"] += t["groepen"]
+    return uit
 
 
 def schrijf_transactie(*, item_id, bedrag, tx_type, ruwe_tekst, flag=None,
@@ -1237,31 +1284,29 @@ if not EVENT:
 # zoekresultaat compleet in beeld komt in plaats van half. Ook de query zelf
 # blijft achterwege; dat scheelt een rondje over een beursnetwerk.
 if st.session_state.get("modus") == "ZOEK":
-    totalen = None
+    per_dag = None
 else:
     try:
-        totalen = dagtotalen(event_id(), VANDAAG, st.session_state["tx_versie"])
+        per_dag = dagtotalen(event_id(), st.session_state["tx_versie"])
     except SQLAlchemyError:
-        totalen = None  # database plat: de foutmelding komt hieronder al
+        per_dag = None  # database plat: de foutmelding komt hieronder al
 
-if totalen is not None:
-    # Verkoop in euro's, trades in aantallen: bij een trade is het bedrag alleen
-    # het verschil dat er cash bij komt of af gaat, dus een som van euro's zou
-    # onderschatten hoeveel er die dag over tafel is gegaan.
-    verkoop = totalen.get("verkoop", {}).get("som", 0.0)
-    trades = totalen.get("trade", {})
-    n_trades, cash = trades.get("groepen", 0), trades.get("som", 0.0)
-    cash_teken = "−" if cash < 0 else "+"
-    regel = (f'Vandaag: verkoop <b>€ {geld(verkoop)}</b> &nbsp;·&nbsp; '
-             f'trades: <b>{n_trades}</b>')
-    if n_trades:
-        regel += f' (cash {cash_teken}€ {geld(abs(cash))})'
-    # Inkoop kan de app niet meer boeken; wat er uit een oudere versie of uit de
-    # WhatsApp-import staat, laten we wél zien — anders lijkt de dag onvolledig.
-    inkoop = totalen.get("inkoop", {}).get("som", 0.0)
-    if inkoop:
-        regel += f' &nbsp;·&nbsp; inkoop <b>€ {geld(inkoop)}</b>'
-    st.markdown(f'<div class="tc-dag">{regel}</div>', unsafe_allow_html=True)
+if per_dag is not None:
+    if len(EVENT["dagen"]) <= 1:
+        # Eendaagse beurs: één regel, alleen vandaag — precies zoals altijd.
+        regels = [totaalregel("Vandaag", per_dag.get(VANDAAG, {}))]
+    else:
+        # Meerdaagse beurs: het totaal bovenaan, daaronder elke beursdag apart.
+        # Een dag met invoer die buiten de beursdagen valt komt er gewoon bij —
+        # liever een regel te veel dan omzet die nergens te zien is.
+        dagen = sorted(set(EVENT["dagen"]) | set(per_dag))
+        kop = "Weekend" if all(d.weekday() >= 5 for d in dagen) else "Beurs"
+        regels = [totaalregel(kop, som_totalen(per_dag))]
+        regels += [f'<span class="tc-dag-dag">'
+                   f'{totaalregel(f"{WEEKDAG[d.weekday()]} {d:%d-%m}", per_dag.get(d, {}))}'
+                   f'</span>' for d in dagen]
+    st.markdown(f'<div class="tc-dag">{"<br>".join(regels)}</div>',
+                unsafe_allow_html=True)
 
 # Op welk event boeken we? Klein en grijs, maar wél in beeld: op 29-08 liep alles
 # ongemerkt naar het vorige event omdat je nergens kon zien waar het heen ging.

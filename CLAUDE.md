@@ -245,6 +245,75 @@ Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de ap
 leest de beursdagen nu uit het event zelf). Geen `TC_EVENT_NAAM` gezet; de app
 volgt de terugval en toont `boekt op: Cardmania XXL Rosmalen` (live gecheckt).
 
+### Tussencyclus na dag 1 (za 10-10, 's avonds) — NIET afgeboekt
+
+Bewust **niet afgeboekt**: dat gebeurt zondagavond voor het hele weekend in
+één keer, anders draait de import van de zondag-Excel het terug. Backups in
+`data/backup/*_20261010_2202_voor_tussencyclus_dag1.*` (Excel, items, transactions).
+
+| | |
+|---|---|
+| `items` | **876** (+37 nieuw, −1 verwijderd), **1501 stuks** |
+| voorraadwaarde (cm) | **€154.410,20** · verkoopwaarde €171.706,00 |
+| Dashboard B5/E5 | **gelijk aan de database** (was €448 / €1.384 hoger, zie hieronder) |
+| Excel ↔ database | **0 afwijkingen op 876 rijen** |
+| verkoop za 10-10 | **€8.406** over 36 regels (33 afspraken), excl. €52 dubbel |
+| trades za 10-10 | **4 afspraken**, cash €370 in / €150 bij = netto **+€220** |
+
+**Excel** kwam terug uit Google Sheets (gedeelde formules opnieuw gevouwen,
+caches aanwezig, structuur schoon — geen dubbele celrefs). Gefixt met
+`scripts/fix_v7_rosmalen_dag1.py` (XML-niveau):
+
+- kop **A1 stond op `x\``** in plaats van `Naam` — de importer weigert dan het
+  hele bestand;
+- nieuwe rijen 841–877 hadden `Vorig aantal = 0` → gelijk aan Aantal gezet;
+- **Poliwrath 24/165 (rij 268) en Prismatic SPC (rij 698)** stonden op 0 en
+  zijn vandaag verkocht → op 1/1 gezet, zodat zondag op 0 uitkomt en niet op −1;
+- **203 vaste waarden in L/O/P/Q** vervangen door de rijformule (Blastoise
+  rij 25: O=540 bij 3 × €130). Die restanten zaten er al maanden; de
+  super-clean van 09-10 simuleerde het Dashboard uit herrekende rijwaarden
+  en verborg ze daardoor. Google Sheets rekent `SUM(O:O)` écht uit — vandaar
+  het gat. Nu kloppen B5/E5 op de cent.
+- Rijen 878–890 zijn 13 door het team voorbereide sjabloonrijen zonder naam
+  (Categorie/Staat voorgevuld, geen Aantal) — de importer slaat ze over.
+- **Eevee Chinees** (rij 748, 0 stuks, geen prijs) is door het team
+  verwijderd; alles vanaf rij 748 schoof één omhoog. Transactie #564 (trade
+  29-08, al afgeboekt) verloor zijn `item_id`; staat in `opschoon_notitie`.
+
+**Transacties event 27** (49 regels op 10-10, alle op de beursdag):
+
+- `is_dubbel`: #687 (Eevee masterball, zelfde seconde als #686), #691
+  (Hydreigon-traderegel zonder cash-anker, 1 s vóór de complete trade),
+  #723–#725 (mandje Regigigas/Lycanroc/Entei 2 s later nogmaals — hetzelfde
+  cascade-patroon als 29-08).
+- **Gengar 1st edition €3.600 (#718) hing al aan de Slab** (rij 838, PSA 10,
+  comp €3.650) — niets te corrigeren. De raw Gengar 20/62 (rij 667) is een
+  ander item en heeft nu cm €35 / comp €42.
+- #713 Glaceon "Japans 215/150 SSR" €35 → gekoppeld aan Glaceon 215/150 JP
+  (enige exacte treffer; cm €60 — prijs nalopen).
+- Niet koppelbaar: #715 Metang 094/086 €5 (niet in v7), #719 "Poker set ruit —
+  3 slabs" €1.000 (code "K q j"; geen van de drie in v7 — team moet aanwijzen).
+- Geen regel ≥10× of ≤0,1× de comp-prijs; alle trades hebben een omschrijving.
+
+**Twijfel voor het team:** 7 nieuwe rijen dupliceren een bestaande naam+code
+(Eevee SWSH087, Mewtwo SWSH229, Lucario SWSH291, Alakazam 9, Mega Gengar
+269/217, Articuno 161/159, Frogadier 089/086) — extra exemplaar hoort als
+Aantal+1 op de bestaande rij; de importer houdt ze nu als 2e voorkomen uit
+elkaar. "Scizor 30th" (rij 841) draagt dezelfde code 108/115 als de Scizor die
+vandaag voor €110 wegging. Turtonator (rij 131) heeft geen cm-prijs.
+
+**App (main, gepusht):** het dagtotaal toont bij een meerdaagse beurs het
+**weekend-/beurstotaal** met daaronder een regel per beursdag (`za 10-10:
+verkoop … · trades …`); eendaags blijft het één `Vandaag:`-regel. Als dubbel
+gemarkeerde regels tellen niet meer mee. Tests 304 checks groen; op 390 px
+eindigt VASTLEGGEN op 594 px bij één kaart. `scripts/screenshots_beurs_app.py`
+kent nu `--dagen`.
+
+**Zondagavond:** Excel van het team opnieuw vergelijken en importeren
+(`--dry-run` eerst, verwacht `zonder tegenhanger: 0`), transacties van 11-10
+opschonen, dán `afboeken_sales.py --event 27` over beide dagen, terugschrijven,
+rij-voor-rij controleren.
+
 ### Eindstand vooravond (09-10, geïmporteerd en rij-voor-rij gecontroleerd)
 
 | | |
