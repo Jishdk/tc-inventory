@@ -323,7 +323,7 @@ regels met kandidaten) is de nalooplijst; niets daarvan is geraden.
   609 px bij één kaart (was 594 — de LOTJE-knop), 826 px bij LOTJE met twee
   kaarten + totaalbedrag. Screenshots `screenshots/set-11…15*.png`.
 
-### LOTJE als modus + setfilter (12-10-2026, branch `lotje-modus`, wacht op go)
+### LOTJE als modus + setfilter (12-10-2026, gemerged op main)
 
 - **Moduskeuze is nu vier:** VERKOOP · LOTJE · TRADE · ZOEK. De losse
   LOTJE-knop van sessie 2 is weg. In LOTJE staat bovenaan één uitleg
