@@ -239,6 +239,86 @@ Alle drie een keer misgegaan; ze kwamen pas boven water bij het maken van de scr
 - Kleinigheid: de testid van een segmented control is `stButtonGroup` in Streamlit 1.60,
   niet `stSegmentedControl`. Beide staan in de CSS zodat een upgrade goed gaat.
 
+## Sessie 2 — sets gekoppeld + zoeken op set (11-10-2026, branch `set-koppeling`)
+
+Staat op branch **`set-koppeling`**, niet op main; mergen na de go van Jishnu.
+Data van Rosmalen is dicht: geen aantal of transactie gewijzigd. Backups
+`data/backup/*_20261011_2158_voor_setkoppeling.*`.
+
+### Wat er in de database bij is gekomen (migratie 012, toegepast op Supabase)
+
+`items.set_afk` (MEG, EVS, sv11b), `set_naam` ("Evolving Skies", "Black Bolt
+(JP)"), `set_jaar`, `set_status` (zeker / afgeleid / twijfel / geen_match /
+geen_match_wel_naam / geen_bron / geen_code). Additief; main merkt er niets
+van. Terugdraaien: `ALTER TABLE items DROP COLUMN set_afk, DROP COLUMN
+set_naam, DROP COLUMN set_jaar, DROP COLUMN set_status;`.
+
+### Dekking: 301 → 687 van 919 items met een set
+
+| categorie | taal | items | vóór | ná |
+|---|---|---|---|---|
+| single | EN | 647 | 294 | **611** |
+| Slab | EN | 47 | 0 | **43** |
+| Sealed | EN | 29 | 0 | 19 |
+| Sealed | JP | 11 | 0 | 7 |
+| single | JP | 115 | 6 | 6 |
+| Slab | JP | 41 | 1 | 1 |
+| single / Slab | CN, KR | 29 | 0 | 0 |
+
+Status: 661 zeker (API, nummer **én** settotaal), 26 afgeleid (JP-code of
+productnaam, `CODE_SETS`/`NAAM_SETS` in `scripts/koppel_sets.py`), 10 twijfel,
+19 geen match (vooral tikfouten: Groundon, Electivere, Dewong, Charmender,
+Vulcanion), 11 geen match met wél een naamtreffer maar een ander settotaal
+(Pitch Black-kaarten met `/084`, Charizard 215/192), 192 geen bron (JP/CN/KR
+singles en slabs: de API dekt alleen EN). **`data/set_twijfel.csv`** (21
+regels met kandidaten) is de nalooplijst; niets daarvan is geraden.
+
+### Hoe het matchen werkt (`scripts/koppel_sets.py`)
+
+- RapidAPI `/pokemon/cards?search=<naam>&card_number=<nummer>` — het
+  `card_number`-filter kent de API wél, en dat omzeilt de limiet van 20
+  treffers per zoekterm (Charizard heeft er 128). Pagina's worden doorgelopen;
+  cache in `data/_cmapi_rapid_cache.json` onder `naam#nummer`.
+- Setlijst (178 EN sets: code, naam, jaar, totalen) via `/pokemon/episodes`
+  in `data/_sets_tcggo.json`. pokemontcg.io gaf 403/500 en is niet gebruikt.
+- Match = nummer gelijk én, als onze code `nummer/totaal` is, het totaal gelijk
+  aan `cards_printed_total` of `cards_total` van de set. Meerdere kandidaten:
+  naamwinnaar (rapidfuzz ≥ 75, 10 punten voorsprong), of allemaal dezelfde
+  set (normaal + reverse), anders twijfel. "CEL" in onze naam → Celebrations.
+- Reprints delen nummer én totaal met het origineel: **Scizor 30th 108/115**
+  kwam op EX Unseen Forces uit en is met de hand op 30th Celebration gezet
+  (`30C UF108`). Let daarop bij nieuwe "30th"-rijen.
+- `--toepassen` schrijft zeker + afgeleid naar de database; twijfel blijft leeg.
+
+### Excel en importer
+
+- Kolom **Set** (C) is gevuld met `set_naam` (`scripts/vul_set_kolom.py`,
+  XML-niveau; een bestaande andere waarde blijft staan, een afkorting ervan —
+  "30th" → "30th Celebration" — wordt aangevuld). Excel ↔ database
+  **0 afwijkingen op 919 rijen, inclusief Set**.
+- `import_inventory_v3.py` leest Set → `set_naam`; `set_afk`/`set_jaar`/
+  `set_status` komen uit de oude tabel als de naam gelijk bleef, anders uit
+  `data/_sets_tcggo.json` (status `excel`). Een lege Set-kolom neemt alles
+  van de oude rij over, dus een Drive-bestand zonder de kolom breekt niets.
+
+### App: zoeken op set, en LOTJE
+
+- **Set als zoekterm** in VERKOOP en ZOEK: afkorting (`evs`, `sv11b`) of het
+  *begin* van de setnaam (`evolving skies`, `obsidian`, `151`). Dan eerst alle
+  kaarten van die set op nummer (`kaartnummer()`: gewone nummers, dan TG/GG/
+  SV-subsets), daarna wat verder op naam/code matcht. Kopregel "set X — N
+  kaarten op nummer" (`tc-set-kop`). Alleen het begin van de naam telt, geen
+  los woord erin — anders werd elke "ex" of "v" een set. Elk resultaat toont
+  nu de setnaam. `set_van()` kiest bij meerdere prefix-treffers de kortste.
+- **LOTJE**: knop onder de snelknoppen (`lotje_knop`), zet `session_state
+  ["lotje"]` en daarmee `default=Totaalprijs` op de prijskeuze. Verder niets
+  nieuws: het was al het mandje in Totaalprijs-modus (naar rato comp, één
+  group_id, per kaart afgeboekt). Hint erbij; uit na vastleggen; niet in
+  TRADE. Vrije invoer met "lot" in de naam toont "gebruik LOTJE".
+- Tests: **333 checks groen** (`set_en_lotje_tests`). 390 px: VASTLEGGEN op
+  609 px bij één kaart (was 594 — de LOTJE-knop), 826 px bij LOTJE met twee
+  kaarten + totaalbedrag. Screenshots `screenshots/set-11…15*.png`.
+
 ## Beurs 10-11 oktober 2026 — Cardmania XXL Rosmalen (voorbereid 09-10)
 
 Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de app

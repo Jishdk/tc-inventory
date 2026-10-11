@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -43,14 +44,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from db import get_engine, INVENTORY  # noqa: E402
 
 STANDAARD_BESTAND = INVENTORY.parent / "data" / "TC_Inventaris_v7.xlsx"
+SETLIJST = INVENTORY.parent / "data" / "_sets_tcggo.json"
 VERLIES_CSV = INVENTORY.parent / "data" / "transacties_link_verloren.csv"
 SHEET = "Inventaris"
 
-# bronkolom -> databasekolom. "Set" en "Laatst bijgewerkt" staan wel in v7 maar
-# zijn in het hele bestand leeg; die slaan we over.
+# bronkolom -> databasekolom. "Laatst bijgewerkt" staat wel in v7 maar is in het
+# hele bestand leeg; die slaan we over. "Set" is sinds sessie 2 (11-10-2026) de
+# leesbare setnaam en wordt gelezen; afkorting en jaar komen uit de oude tabel
+# of uit de setlijst `data/_sets_tcggo.json`.
 KOLOMMEN = {
     "Naam": "onze_naam",
     "Code": "code",
+    "Set": "set_naam",
     "Taal": "taal",
     "Categorie": "categorie",
     "Promo": "promo",
@@ -72,11 +77,13 @@ INSERT = text("""
 INSERT INTO items (
     bron_rij, onze_naam, officiele_naam, cardmarket_id, code, set_code, taal,
     categorie, promo, vintage_modern, staat, grade, aantal, vorig_aantal,
-    verkocht, prijs_cm, comp_prijs, status, match_status, notitie
+    verkocht, prijs_cm, comp_prijs, status, match_status, notitie,
+    set_naam, set_afk, set_jaar, set_status
 ) VALUES (
     :bron_rij, :onze_naam, :officiele_naam, :cardmarket_id, :code, :set_code, :taal,
     :categorie, :promo, :vintage_modern, :staat, :grade, :aantal, :vorig_aantal,
-    :verkocht, :prijs_cm, :comp_prijs, :status, :match_status, :notitie
+    :verkocht, :prijs_cm, :comp_prijs, :status, :match_status, :notitie,
+    :set_naam, :set_afk, :set_jaar, :set_status
 )
 """)
 
@@ -188,6 +195,42 @@ def lees_bestand(pad: Path) -> tuple[list[dict], dict[str, int]]:
     return rijen, overgeslagen
 
 
+def _setlijst() -> dict:
+    """setnaam (kleine letters) -> (afkorting, jaar) uit data/_sets_tcggo.json."""
+    if not SETLIJST.exists():
+        return {}
+    uit = {}
+    for s in json.loads(SETLIJST.read_text()):
+        if s.get("name"):
+            jaar = (s.get("released_at") or "")[:4]
+            uit[s["name"].strip().lower()] = (s.get("code"), int(jaar) if jaar.isdigit() else None)
+    return uit
+
+
+_SETS = None
+
+
+def vul_set(item: dict, bron) -> None:
+    """Set-kolommen: de naam komt uit de Excel (kolom Set); afkorting, jaar en
+    status uit de oude tabel als de naam daar dezelfde is, anders uit de
+    setlijst. Een lege Set-kolom neemt alles van de oude rij over — zo
+    overleeft de koppeling een bestand waarin het team de kolom nog niet heeft."""
+    global _SETS
+    oud = bron or {}
+    if not item.get("set_naam"):
+        for veld in ("set_naam", "set_afk", "set_jaar", "set_status"):
+            item[veld] = oud.get(veld)
+        return
+    if oud.get("set_naam") and oud["set_naam"].strip().lower() == item["set_naam"].strip().lower():
+        item["set_afk"], item["set_jaar"] = oud.get("set_afk"), oud.get("set_jaar")
+        item["set_status"] = oud.get("set_status") or "excel"
+        return
+    if _SETS is None:
+        _SETS = _setlijst()
+    afk, jaar = _SETS.get(item["set_naam"].strip().lower(), (None, None))
+    item["set_afk"], item["set_jaar"], item["set_status"] = afk, jaar, "excel"
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--bestand", type=Path, default=STANDAARD_BESTAND)
@@ -208,7 +251,8 @@ def main():
     with engine.begin() as conn:
         oud = conn.execute(text(
             "SELECT id, onze_naam, code, officiele_naam, cardmarket_id, set_code, "
-            "match_status FROM items ORDER BY bron_rij NULLS LAST, id")).mappings().all()
+            "match_status, set_naam, set_afk, set_jaar, set_status "
+            "FROM items ORDER BY bron_rij NULLS LAST, id")).mappings().all()
         oude_sleutels = nummer_sleutels([(r["onze_naam"], r["code"]) for r in oud])
         oud_per_sleutel = {sl: r for sl, r in zip(oude_sleutels, oud)}
 
@@ -220,6 +264,7 @@ def main():
                 verrijkt += 1
             for veld in ("officiele_naam", "cardmarket_id", "set_code", "match_status"):
                 item[veld] = (bron or {}).get(veld)
+            vul_set(item, bron)
         print(f"Verrijking overgenomen uit de oude tabel: {verrijkt} van {len(nieuw)}")
 
         # 2. wat verwijst er naar de oude items, en overleeft dat de vervanging?

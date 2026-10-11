@@ -76,7 +76,8 @@ CREATE TABLE items (
     id INTEGER PRIMARY KEY AUTOINCREMENT, onze_naam TEXT NOT NULL,
     officiele_naam TEXT, code TEXT, set_code TEXT, categorie TEXT,
     staat TEXT, grade TEXT, taal TEXT DEFAULT 'EN', comp_prijs NUMERIC,
-    prijs_cm NUMERIC, aantal INTEGER NOT NULL DEFAULT 0);
+    prijs_cm NUMERIC, aantal INTEGER NOT NULL DEFAULT 0,
+    set_afk TEXT, set_naam TEXT, set_jaar INTEGER, set_status TEXT);
 CREATE TABLE transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, item_id INTEGER,
     bron_rij INTEGER, datum DATE NOT NULL, tijd TIME, kanaal TEXT NOT NULL,
@@ -128,6 +129,11 @@ HARDLOPERS = [
     ("Mega Dream", "m2a", "Sealed", "NM", None, 95.00, None, 24),
     ("Black Bolt", "sv11b", "Sealed", "NM", None, 120.00, None, 0),
 ]
+
+# Sets zoals de koppeling van sessie 2 ze levert: afkorting + naam. De EVS-kaarten
+# staan bewust niet op nummervolgorde in ITEMS, zodat de set-zoek ze moet sorteren.
+SETS = {"EVS": ("Evolving Skies", 2021), "OBF": ("Obsidian Flames", 2023),
+        "PR": ("SWSH Black Star Promos", 2020), "BS": ("Base Set", 1999)}
 
 fouten = []
 
@@ -255,12 +261,16 @@ def maak_engine():
             if stmt.strip():
                 c.execute(text(stmt))
         for onze, off, code, setc, cat, staat, grade, prijs, aantal in ITEMS:
+            afk = setc.split()[0] if setc else None
+            naam_set, jaar = SETS.get(afk, (None, None))
             c.execute(text(
                 "INSERT INTO items (onze_naam, officiele_naam, code, set_code, "
-                "categorie, staat, grade, comp_prijs, aantal) "
-                "VALUES (:a,:b,:c,:d,:e,:f,:g,:h,:i)"),
+                "categorie, staat, grade, comp_prijs, aantal, set_afk, set_naam, "
+                "set_jaar, set_status) "
+                "VALUES (:a,:b,:c,:d,:e,:f,:g,:h,:i,:j,:k,:l,:m)"),
                 {"a": onze, "b": off, "c": code, "d": setc, "e": cat, "f": staat,
-                 "g": grade, "h": prijs, "i": aantal})
+                 "g": grade, "h": prijs, "i": aantal, "j": afk, "k": naam_set,
+                 "l": jaar, "m": "zeker" if afk else None})
         for naam, code, cat, staat, grade, comp, cm, aantal in ALLEEN_CM + HARDLOPERS:
             c.execute(text(
                 "INSERT INTO items (onze_naam, code, categorie, staat, grade, "
@@ -1441,6 +1451,118 @@ def event_keuze_tests(AppTest, db):
         st.cache_data.clear()
 
 
+def set_en_lotje_tests(AppTest, db):
+    """Sessie 2: zoeken op set (afkorting of naam, op nummer gesorteerd, setnaam
+    in elk resultaat) en de LOTJE-knop die het mandje in Totaalprijs-modus zet."""
+    import streamlit as st
+
+    engine = maak_engine()
+    db.get_engine = lambda: engine
+    st.cache_resource.clear(); st.cache_data.clear()
+    at = AppTest.from_file(str(INVENTORY / "beurs_app.py"), default_timeout=60)
+    at.run()
+
+    print("\n" + "=" * 72)
+    print("SETS — zoeken op set, en de LOTJE-knop")
+    print("=" * 72)
+
+    def labels(at):
+        return [b.label for b in knoppen(at, "pick_")]
+
+    # --- S1: afkorting --------------------------------------------------------
+    at.text_input(key="zoekterm").set_value("evs").run()
+    kop("S1.", "Zoek 'evs' in VERKOOP", "beide Evolving Skies-kaarten, op nummer: 189 vóór 215")
+    lb = labels(at)
+    check(len(lb) == 2, f"twee treffers (kreeg {len(lb)})")
+    check(lb and lb[0].startswith("Umbreon V\n") and lb[1].startswith("Umbreon VMAX"),
+          f"op nummer gesorteerd: 189 vóór 215 ({[x.split(chr(10))[0] for x in lb]})")
+    check(all("Evolving Skies" in x for x in lb), "setnaam staat in elk resultaat")
+    check(any("set <b>Evolving Skies</b> — 2 kaarten" in m.value for m in at.markdown),
+          "kopregel: welke set en hoeveel kaarten")
+    uitkomst(f"resultaten: {[x.split(chr(10))[0] for x in lb]}")
+
+    # --- S2: begin van de setnaam ----------------------------------------------
+    at.text_input(key="zoekterm").set_value("evolving sk").run()
+    kop("S2.", "Zoek 'evolving sk' (begin van de setnaam)", "dezelfde twee, zelfde volgorde")
+    namen = [x.split(chr(10))[0] for x in labels(at)]
+    check(len(namen) == 2 and namen[0] == "Umbreon V" and namen[1].startswith("Umbreon VMAX"),
+          f"setnaam-prefix werkt ({namen})")
+    at.text_input(key="zoekterm").set_value("obsidian").run()
+    namen = [x.split(chr(10))[0] for x in labels(at)]
+    check(len(namen) == 1 and namen[0].startswith("Charizard ex"),
+          f"'obsidian' geeft alleen Obsidian Flames ({namen})")
+
+    # --- S3: naam en code blijven werken --------------------------------------
+    at.text_input(key="zoekterm").set_value("umbreon").run()
+    kop("S3.", "Zoek 'umbreon' (gewone naam)", "twee Umbreons, de naam-sortering van altijd")
+    check(len(labels(at)) == 2 and all(x.startswith("Umbreon") for x in labels(at)),
+          f"naam zoeken ongewijzigd ({[x.split(chr(10))[0] for x in labels(at)]})")
+    at.text_input(key="zoekterm").set_value("223").run()
+    namen = [x.split(chr(10))[0] for x in labels(at)]
+    check(len(namen) == 1 and namen[0].startswith("Charizard ex"), f"code zoeken ongewijzigd ({namen})")
+    at.text_input(key="zoekterm").set_value("evs umbreon v").run()
+    check(len(labels(at)) >= 1 and all("Evolving Skies" in x for x in labels(at)),
+          "set + naam samen smalt in in plaats van uit te breiden")
+
+    # --- S4: ZOEK-modus ---------------------------------------------------------
+    at.segmented_control(key="modus").set_value("ZOEK").run()
+    at.text_input(key="kijk_zoekterm").set_value("evolving skies").run()
+    kop("S4.", "ZOEK-modus, 'evolving skies'", "twee kaarten op nummer, met setnaam in de metaregel")
+    kk = kijkkaarten(at)
+    check(len(kk) == 2 and kk[0].startswith("Umbreon V ") and kk[1].startswith("Umbreon VMAX"),
+          f"op nummer ({[x[:14] for x in kk]})")
+    check(all("Evolving Skies" in x for x in kk), "setnaam in elke kaart")
+    check(any("set <b>Evolving Skies</b>" in m.value for m in at.markdown), "kopregel ook in ZOEK")
+    check(not css_botsingen(at), f"geen CSS-botsingen ({css_botsingen(at)})")
+    uitkomst(f"kaarten: {[x[:40] for x in kk]}")
+
+    # --- L1: LOTJE-knop ---------------------------------------------------------
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    kop("L1.", "Staat er een LOTJE-knop, en wat doet een tik?",
+        "knop boven de zoekbalk; een tik zet lotje aan, toont de hint en de knop wordt primair")
+    check(at.button(key="lotje_knop").label.startswith("LOTJE — meerdere kaarten"),
+          f"knop aanwezig ({at.button(key='lotje_knop').label!r})")
+    at.button(key="lotje_knop").click().run()
+    check(at.session_state["lotje"] is True, "lotje staat aan")
+    check(at.button(key="lotje_knop").label.startswith("LOTJE aan"),
+          f"de knop zegt dat hij aan staat ({at.button(key='lotje_knop').label!r})")
+    check(any("verdeelt het bedrag naar rato" in m.value for m in at.markdown),
+          "hint: tik de kaarten aan, één bedrag, naar rato")
+
+    # --- L2: twee kaarten, één bedrag -----------------------------------------
+    kies(at, "umbreon vmax")
+    kies(at, "charizard")
+    kop("L2.", "Twee kaarten in het lotje en €100 als totaal",
+        "prijskeuze staat op Totaalprijs (ook in de browser), vastleggen splitst naar rato en boekt per kaart")
+    check(at.segmented_control(key="prijs_modus").value == "Totaalprijs",
+          f"prijskeuze op Totaalprijs ({at.segmented_control(key='prijs_modus').value})")
+    check(echt_gekozen(at, "prijs_modus"), "en de browser ziet die keuze ook (default=)")
+    at.number_input(key="mandje_totaal").set_value(100.0).run()
+    at.button(key="vastleggen").click().run()
+    r = [x for x in rijen(engine) if x["flag"] == "mandje-totaal"]
+    check(len(r) == 2, f"twee regels met flag mandje-totaal (kreeg {len(r)})")
+    check(abs(sum(float(x["bedrag"]) for x in r) - 100.0) < 0.005,
+          f"samen precies €100 ({[float(x['bedrag']) for x in r]})")
+    check(len({x["group_id"] for x in r}) == 1 and r[0]["group_id"], "één group_id voor het lotje")
+    check(all(x["item_id"] for x in r), "elke regel hangt aan een kaart (dus afboekbaar)")
+    check(at.session_state["lotje"] is False, "na vastleggen staat lotje weer uit")
+    check(at.button(key="lotje_knop").label.startswith("LOTJE — "), "en de knop staat weer op uit")
+    uitkomst(*[toon(x) for x in r])
+
+    # --- L3: vrije invoer met 'lot' in de naam --------------------------------
+    at.text_input(key="vrij_naam").set_value("Lotje 30th").run()
+    kop("L3.", "Vrije invoer 'Lotje 30th'", "hint: gebruik LOTJE, dan worden de kaarten gekoppeld")
+    check(any("tc-lotje-hint" in m.value for m in at.markdown), "hint verschijnt bij 'lot' in de naam")
+    at.text_input(key="vrij_naam").set_value("Pikachu promo").run()
+    check(not any("tc-lotje-hint" in m.value for m in at.markdown), "en niet bij een gewone naam")
+
+    # --- L4: niet in TRADE -----------------------------------------------------
+    at.segmented_control(key="modus").set_value("TRADE").run()
+    check(not knoppen(at, "lotje_knop"), "in TRADE is er geen LOTJE-knop (geen prijs per kaart)")
+    check(not at.exception, f"geen exception ({at.exception})")
+    print()
+
+
 def main():
     engine = maak_engine()
 
@@ -1674,6 +1796,7 @@ def main():
     scenarios(AppTest, db)
 
     event_keuze_tests(AppTest, db)
+    set_en_lotje_tests(AppTest, db)
 
     # --- schrijffout: invoer blijft behouden ------------------------------
     kapot = create_engine("postgresql+psycopg2://x:y@127.0.0.1:1/none",
