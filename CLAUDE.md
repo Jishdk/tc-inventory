@@ -46,6 +46,10 @@ Pipeline voor inventaris- en beursadministratie:
 
 ## Beurs-app (snelle invoer op de telefoon)
 
+**Live:** https://tc-inventory-vw6vv5dp9herljptuxe6k3.streamlit.app/ (Streamlit Community
+Cloud, bouwt automatisch bij elke push naar `main`; bij een oude versie één keer
+rebooten in de Cloud-UI).
+
 `beurs_app.py` — losstaande Streamlit-app waarmee het team tijdens een beurs live
 vastlegt wat er de deur uit gaat. Event: **Cardmaniacs Nijmegen 15-16 augustus 2026**
 (`EVENT_NAAM` bovenin; beide dagen hangen aan dit ene event, `datum` = dag van invoer).
