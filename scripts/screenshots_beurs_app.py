@@ -244,10 +244,21 @@ def draaiboek(s: Scherm):
     # hoeveel kaarten staan er compleet in beeld zonder te scrollen?
     s.zoek_kijk("st"); s.shot("9-zoek-lijst"); s.tel_zichtbaar("ZOEK, 5 treffers")
 
+    # Sessie 2: een set als zoekterm — afkorting én naam, op nummer gesorteerd.
+    s.zoek_kijk("evolving skies"); s.shot("11-zoek-set-naam")
+    s.zoek_kijk("evs"); s.shot("12-zoek-set-afkorting")
+
     print("screenshots — terug naar verkoop")
     s.pg.mouse.wheel(0, -4000); s.pg.wait_for_timeout(800)
     s.klik("modus", 0)
     s.shot("10-terug-in-verkoop"); s.vouw("leeg mandje na ZOEK")
+
+    print("screenshots — set-zoek in VERKOOP en LOTJE")
+    s.typ("evs"); s.shot("13-verkoop-set-zoek")
+    s.typ(""); s.pg.wait_for_timeout(500)
+    s.klik("lotje_knop"); s.shot("14-lotje-aan"); s.vouw("LOTJE aan, leeg mandje")
+    s.kies("umbreon"); s.kies("charizard"); s.shot("15-lotje-twee-kaarten")
+    s.vouw("LOTJE, 2 kaarten + totaalbedrag")
 
 
 if __name__ == "__main__":

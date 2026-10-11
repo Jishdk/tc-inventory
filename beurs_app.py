@@ -27,6 +27,7 @@ Ontwerpkeuzes:
 from __future__ import annotations
 
 import html
+import re
 import math
 import os
 import sys
@@ -213,6 +214,10 @@ BASIS_CSS = """
       background: var(--card); border: 1px solid var(--line);
       border-left: 4px solid var(--elev); border-radius: var(--r-sm);}
   [class*="st-key-snel_"] button:hover {border-left-color: var(--red-line);}
+  /* LOTJE: zichtbaar maar rustig — een keuze, geen alarm */
+  .st-key-lotje_knop button {min-height: 2.8rem; font-size: .9rem; font-weight: 700;
+      letter-spacing: .03em; border-radius: var(--r-sm);}
+  .st-key-lotje_knop button p {font-size: .9rem !important; font-weight: 700;}
   [class*="st-key-snel_"] button p {white-space: pre-line; margin: 0;
       line-height: 1.3; font-size: .92rem; font-weight: 700; color: var(--text);}
   /* !important omdat Streamlit :gray[] zelf op rgba(250,250,250,.6) zet en met
@@ -406,6 +411,14 @@ BASIS_CSS = """
   /* terzijdes (geen beursdag, snelknop zonder kaart): mag je over het hoofd zien */
   .tc-note {font-size: .74rem; color: var(--muted); opacity: .85;
       text-align: center; margin: -.2rem 0 0;}
+  /* kopregel boven een set-zoekresultaat: zelfde toon, maar zonder de
+     negatieve marge — in de resultatenlijst schoof hij anders onder de eerste
+     knop */
+  .tc-set-kop {font-size: .8rem; color: var(--muted); text-align: center;
+      margin: 0; padding: .15rem 0 .25rem; line-height: 1.3;}
+  div.st-key-resultaten [data-testid="stMarkdown"] {overflow: visible;
+      margin-bottom: .3rem;}
+  .tc-set-kop b {color: var(--text);}
 
   /* vangnet: lichte rand, het is een uitwijk en geen hoofdroute */
   [data-testid="stExpander"] details {border-color: var(--line);
@@ -568,14 +581,14 @@ def event_id() -> int:
 
 
 TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
-                 "staat", "grade", "taal"]
+                 "staat", "grade", "taal", "set_afk", "set_naam"]
 
 
 @st.cache_data(ttl=600, show_spinner="Kaarten laden…")
 def laad_items() -> pd.DataFrame:
     df = lees("""
         SELECT id, onze_naam, officiele_naam, code, set_code, categorie, staat,
-               grade, taal, comp_prijs, prijs_cm, aantal
+               grade, taal, comp_prijs, prijs_cm, aantal, set_afk, set_naam
         FROM items ORDER BY officiele_naam NULLS LAST, onze_naam
     """)
     # Voorraad kan negatief zijn (er is meer verkocht dan de inventaris wist);
@@ -594,9 +607,48 @@ def laad_items() -> pd.DataFrame:
     for kol in TEKSTKOLOMMEN:
         df[kol] = df[kol].astype(object).where(df[kol].notna() & (df[kol] != ""), None)
     df["naam"] = df["officiele_naam"].where(df["officiele_naam"].notna(), df["onze_naam"])
-    df["zoek"] = df[["onze_naam", "officiele_naam", "code", "set_code"]].apply(
+    df["zoek"] = df[["onze_naam", "officiele_naam", "code", "set_code", "set_afk",
+                     "set_naam"]].apply(
         lambda r: normaliseer(" ".join(x for x in r if x)), axis=1)
+    # Kaartnummer als getal, om een set op volgorde te tonen: "173/195" -> 173,
+    # "TG13/TG30" -> (TG, 13). Zonder nummer achteraan.
+    df["_nr"] = df["code"].map(kaartnummer)
     return df
+
+
+def kaartnummer(code) -> tuple:
+    """Sorteersleutel uit een kaartcode: gewone nummers eerst, dan subsets
+    (TG13, GG55, SV107), dan alles zonder cijfer."""
+    if not code:
+        return (2, "", 0)
+    deel = str(code).split("/")[0].strip().upper()
+    m = re.match(r"([A-Z-]*)\s*0*(\d+)", deel)
+    if not m:
+        return (2, deel, 0)
+    return (0 if not m.group(1) else 1, m.group(1), int(m.group(2)))
+
+
+def set_van(df: pd.DataFrame, term: str) -> str | None:
+    """Is de zoekterm een set? Dan de setnaam, anders None.
+
+    Een set herken je aan zijn afkorting ("evs", "obf", "sv11b") of aan het
+    begin van zijn naam ("evolving skies", "obsidian", "151"). Alleen het begin,
+    niet een los woord erin: "mega" is de set Mega Evolution, maar "evolution"
+    is niets — anders zou elke naam met "ex" of "v" erin een set worden."""
+    t = normaliseer(term).strip()
+    if len(t) < 2 or "set_naam" not in df:
+        return None
+    afk = df["set_afk"].map(lambda x: normaliseer(x) if x else "")
+    if (afk == t).any():
+        return df.loc[afk == t, "set_naam"].iloc[0] or df.loc[afk == t, "set_afk"].iloc[0]
+    namen = df["set_naam"].map(lambda x: normaliseer(x) if x else "")
+    prefix = namen[namen.str.startswith(t) & (namen != "")]
+    if prefix.empty:
+        return None
+    # Bij meerdere sets die zo beginnen ("mega" -> Mega Evolution én MEP
+    # Black Star Promos) wint de kortste naam: die lijkt het meest op de term.
+    kortste = prefix.loc[prefix.str.len().idxmin()]
+    return df.loc[namen == kortste, "set_naam"].iloc[0]
 
 
 def kenmerk(rij) -> str:
@@ -839,6 +891,17 @@ def zoek(df: pd.DataFrame, term: str) -> pd.DataFrame:
     for t in tokens:
         masker &= df["zoek"].str.contains(t, regex=False, na=False)
     treffers = df[masker].copy()
+    # Een set als zoekterm: eerst alle kaarten van die set op nummer, daarna
+    # wat er verder nog op naam of code matcht. Zo levert "evolving skies" de
+    # set op volgorde, en "mega char" nog steeds gewoon de Mega Charizards.
+    setnaam = set_van(df, term)
+    if setnaam:
+        in_set = df["set_naam"] == setnaam
+        rest = treffers[~in_set.reindex(treffers.index, fill_value=False)].copy()
+        rest["_start"] = ~rest["naam"].map(normaliseer).str.startswith(tokens[0])
+        setdeel = df[in_set].sort_values(["_nr", "naam"])
+        return pd.concat([setdeel, rest.sort_values(["_start", "naam", "prijs"],
+                                                    ascending=[True, True, False])])
     # Naam die met de zoekterm begint eerst — dat is meestal wat je bedoelt.
     treffers["_start"] = ~treffers["naam"].map(normaliseer).str.startswith(tokens[0])
     return treffers.sort_values(["_start", "naam", "prijs"],
@@ -896,14 +959,19 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
     """Zoekresultaten als knoppen; geeft de aangeklikte rij terug (of None)."""
     treffers = zoek(df, term)
     with st.container(key=container_key):
+        setnaam = set_van(df, term)
+        if setnaam:
+            n_set = int((df["set_naam"] == setnaam).sum())
+            st.markdown(f'<div class="tc-set-kop">set <b>{html.escape(setnaam)}</b> — '
+                        f'{n_set} kaarten op nummer</div>', unsafe_allow_html=True)
         for _, r in treffers.head(MAX_RESULTATEN).iterrows():
             # "cm" erachter als het geen comp-prijs is: anders lijkt een
             # Cardmarket-prijs op een afgesproken verkoopprijs.
             bedrag, is_cm = prijs_label(r)
             prijs = bedrag + (" cm" if is_cm else "")
             # Voorraad achteraan: zo zie je vóór het tikken of dit de laatste is.
-            detail = " · ".join(x for x in [kenmerk(r), conditie(r), prijs,
-                                            voorraad_tekst(r["aantal"])] if x)
+            detail = " · ".join(x for x in [kenmerk(r), r["set_naam"], conditie(r),
+                                            prijs, voorraad_tekst(r["aantal"])] if x)
             # Zachte regelafbreking (\n) + CSS `white-space: pre-line` geeft de
             # tweede regel; :gray[] maakt er een span van die klein wordt gezet.
             if st.button(f"{r['naam']}\n:gray[{detail}]", key=f"{prefix}{r['id']}",
@@ -938,8 +1006,8 @@ def toon_kijken(df: pd.DataFrame):
 
     term = st.session_state.get("kijk_zoekterm") or ""
     if len(term.strip()) < 2:
-        st.caption("Typ een naam of een stuk van de code — bijvoorbeeld "
-                   "**umbreon**, **215** of **evs**.")
+        st.caption("Typ een naam, een stuk van de code of een set — bijvoorbeeld "
+                   "**umbreon**, **215**, **evs** of **evolving skies**.")
         return
 
     treffers = zoek(df, term)
@@ -947,6 +1015,11 @@ def toon_kijken(df: pd.DataFrame):
         st.caption("Niets gevonden. Probeer een kortere term, of een stuk van "
                    "de kaartcode.")
         return
+    setnaam = set_van(df, term)
+    if setnaam:
+        n_set = int((df["set_naam"] == setnaam).sum())
+        st.markdown(f'<div class="tc-set-kop">set <b>{html.escape(setnaam)}</b> — '
+                    f'{n_set} kaarten op nummer</div>', unsafe_allow_html=True)
 
     zichtbaar = treffers.head(MAX_RESULTATEN_ZOEK)
     kaarten, ergens_cm = [], False
@@ -956,7 +1029,7 @@ def toon_kijken(df: pd.DataFrame):
         # Set-code, taal en staat scheiden gelijknamige kaarten van elkaar: er
         # liggen veertien Pikachu's, en de klant vraagt naar één ervan.
         meta = " · ".join(html.escape(str(x)) for x in
-                          [kenmerk(r), r["taal"], r["staat"]] if x)
+                          [kenmerk(r), r["set_naam"], r["taal"], r["staat"]] if x)
         regel = f'<div class="tc-kijk-naam">{html.escape(str(r["naam"]))}</div>'
         if meta or r["grade"]:
             regel += f'<div class="tc-kijk-meta">{meta}'
@@ -1042,6 +1115,10 @@ def init_state():
     # Is dit mandje via "nog een" gevuld? Dan is de herhaling gewild en hoeft de
     # dubbel-check er niet naar te vragen.
     st.session_state.setdefault("bewust_herhaald", False)
+    # LOTJE: meerdere kaarten voor één bedrag. Technisch is dat het mandje in
+    # Totaalprijs-modus — dat bestond al, maar niemand vond het. De knop zet
+    # alleen deze vlag; de prijskeuze krijgt er zijn `default=` van.
+    st.session_state.setdefault("lotje", False)
 
     # Widget-state opruimen kan alleen vóórdat de widgets van deze run bestaan;
     # daarom zetten de knoppen hieronder een vlag en gebeurt het werk hier.
@@ -1069,6 +1146,7 @@ def init_state():
         # ongemerkt de verkeerde kant op.
         st.session_state["onderhandeld_keuze"] = None
         st.session_state["bewust_herhaald"] = False
+        st.session_state["lotje"] = False
         st.session_state.pop("prijs_modus", None)
         st.session_state.pop("cash_richting", None)
         st.session_state["dubbel_vraag"] = None
@@ -1431,6 +1509,30 @@ if snel_mislukt:
     st.markdown(f'<div class="tc-note">Snelknop zonder eenduidige kaart: {uitleg}'
                 f'</div>', unsafe_allow_html=True)
 
+# --- LOTJE: meerdere kaarten, één bedrag ---------------------------------
+# Niets nieuws onder de motorkap: dit is het mandje in Totaalprijs-modus, dat
+# naar rato van de comp-prijs verdeelt en per kaart afboekt. Het bestond al,
+# maar zat verstopt achter een keuzebalk die pas bij de tweede kaart verschijnt.
+# Rosmalen: drie lotjes (€1.495) als vrije tekst, zonder één afgeboekte kaart.
+if not TRADE:
+    LOTJE = st.session_state["lotje"]
+    label = ("LOTJE aan — tik de kaarten aan, vul onderaan één bedrag in"
+             if LOTJE else "LOTJE — meerdere kaarten, één bedrag")
+    if st.button(label, key="lotje_knop", width="stretch",
+                 type="primary" if LOTJE else "secondary"):
+        st.session_state["lotje"] = not LOTJE
+        if not LOTJE:
+            st.session_state["prijs_modus"] = PRIJS_MODI[1]
+        else:
+            st.session_state.pop("prijs_modus", None)
+        st.rerun()
+    if LOTJE:
+        st.markdown('<div class="tc-note">zoek en tik elke kaart van het lotje aan; '
+                    'VASTLEGGEN verdeelt het bedrag naar rato over de kaarten en '
+                    'boekt ze af</div>', unsafe_allow_html=True)
+else:
+    LOTJE = False
+
 st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
               label_visibility="collapsed")
 term = st.session_state.get("zoekterm", "")
@@ -1576,9 +1678,12 @@ if TRADE:
 elif len(mandje) > 1:
     # Pas vanaf twee kaarten een keuze: bij één kaart is de prijs van die kaart
     # al het totaal, en zou de knop alleen maar ruimte kosten.
+    # In LOTJE begint de keuze op Totaalprijs. Via `default=`, niet alleen via
+    # session_state: deze balk verschijnt pas bij de tweede kaart, en een waarde
+    # die dan al in session_state staat komt niet bij de browser aan.
     st.segmented_control("Prijs", PRIJS_MODI, key="prijs_modus",
-                         default=PRIJS_MODI[0], width="stretch",
-                         label_visibility="collapsed", required=True)
+                         default=PRIJS_MODI[1] if LOTJE else PRIJS_MODI[0],
+                         width="stretch", label_visibility="collapsed", required=True)
     if TOTAALPRIJS:
         st.number_input("Afgesproken totaalbedrag", min_value=0.0, step=0.50,
                         format="%.2f", key="mandje_totaal",
@@ -1713,6 +1818,13 @@ if (klik or bevestigd) and mandje:
 with st.expander("Kaart staat er niet in → vrij invoeren"):
     st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
                   label_visibility="collapsed")
+    if "lot" in normaliseer(st.session_state.get("vrij_naam") or ""):
+        # Een lotje als vrije tekst is omzet zonder afboeking — precies wat op
+        # Rosmalen drie keer misging. Wijzen, niet blokkeren: soms is het echt
+        # iets wat niet in de inventaris staat.
+        st.markdown('<div class="tc-note tc-lotje-hint">een lotje? gebruik '
+                    '<b>LOTJE</b> boven de zoekbalk, dan worden de kaarten '
+                    'gekoppeld en afgeboekt</div>', unsafe_allow_html=True)
     # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
     # aan de inventaris te koppelen — hij heeft geen item_id.
     st.text_input("Code", key="vrij_code",
