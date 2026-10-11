@@ -144,6 +144,12 @@ def check(voorwaarde, omschrijving):
         fouten.append(omschrijving)
 
 
+def st_bevestiging(at) -> str:
+    """De gouden bevestigingsflits als platte tekst."""
+    blok = [m.value for m in at.markdown if 'class="tc-ok"' in m.value]
+    return re.sub(r"<[^>]+>", "", blok[0]).strip() if blok else ""
+
+
 def dagtotaal(at) -> str:
     """De balk bovenaan als platte tekst: 'Vandaag: verkoop € 430,00 · trades: 0'."""
     balk = [m.value for m in at.markdown if 'class="tc-dag"' in m.value]
@@ -1516,49 +1522,88 @@ def set_en_lotje_tests(AppTest, db):
     check(not css_botsingen(at), f"geen CSS-botsingen ({css_botsingen(at)})")
     uitkomst(f"kaarten: {[x[:40] for x in kk]}")
 
-    # --- L1: LOTJE-knop ---------------------------------------------------------
-    at.segmented_control(key="modus").set_value("VERKOOP").run()
-    kop("L1.", "Staat er een LOTJE-knop, en wat doet een tik?",
-        "knop boven de zoekbalk; een tik zet lotje aan, toont de hint en de knop wordt primair")
-    check(at.button(key="lotje_knop").label.startswith("LOTJE — meerdere kaarten"),
-          f"knop aanwezig ({at.button(key='lotje_knop').label!r})")
-    at.button(key="lotje_knop").click().run()
-    check(at.session_state["lotje"] is True, "lotje staat aan")
-    check(at.button(key="lotje_knop").label.startswith("LOTJE aan"),
-          f"de knop zegt dat hij aan staat ({at.button(key='lotje_knop').label!r})")
-    check(any("verdeelt het bedrag naar rato" in m.value for m in at.markdown),
-          "hint: tik de kaarten aan, één bedrag, naar rato")
+    # --- F1: setfilter in ZOEK ---------------------------------------------
+    at.text_input(key="kijk_zoekterm").set_value("").run()
+    opties = at.selectbox(key="kijk_set_filter").options
+    kop("F1.", "De set-dropdown in ZOEK", "'Alle sets' bovenaan, dan elke set met aantal, nieuwste jaar eerst")
+    check(opties[0] == "Alle sets", f"eerste optie is 'Alle sets' ({opties[0]!r})")
+    check(opties[1:] == ["Obsidian Flames (1)", "Evolving Skies (2)",
+                         "SWSH Black Star Promos (1)", "Base Set (1)"],
+          f"sets op jaar (2023, 2021, 2020, 1999) met aantal ({opties[1:]})")
+    at.selectbox(key="kijk_set_filter").select("Evolving Skies (2)").run()
+    kk = kijkkaarten(at)
+    check(len(kk) == 2 and kk[0].startswith("Umbreon V ") and kk[1].startswith("Umbreon VMAX"),
+          f"set gekozen zonder zoekterm: alle kaarten op nummer ({[x[:14] for x in kk]})")
+    check(any("set <b>Evolving Skies</b> — 2 kaarten" in m.value for m in at.markdown),
+          "kopregel met setnaam en aantal")
+    at.text_input(key="kijk_zoekterm").set_value("vmax").run()
+    kk = kijkkaarten(at)
+    check(len(kk) == 1 and kk[0].startswith("Umbreon VMAX"),
+          f"set + zoekterm combineren: alleen de VMAX ({[x[:14] for x in kk]})")
+    at.selectbox(key="kijk_set_filter").select("Alle sets").run()
+    at.text_input(key="kijk_zoekterm").set_value("evs").run()
+    check(len(kijkkaarten(at)) == 2, "set-zoek via tekst ('evs') werkt nog naast de dropdown")
+    uitkomst(f"opties: {opties}")
 
-    # --- L2: twee kaarten, één bedrag -----------------------------------------
+    # --- F2: setfilter in VERKOOP, compact ------------------------------------
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
+    kop("F2.", "Dezelfde dropdown in VERKOOP", "set kiezen zonder zoekterm geeft de set op nummer als tikbare resultaten")
+    check(at.selectbox(key="set_filter").options == opties, "zelfde opties als in ZOEK")
+    at.selectbox(key="set_filter").select("Obsidian Flames (1)").run()
+    namen = [x.split(chr(10))[0] for x in labels(at)]
+    check(len(namen) == 1 and namen[0].startswith("Charizard ex"), f"Obsidian Flames gekozen → Charizard ex ({namen})")
+    at.selectbox(key="set_filter").select("Alle sets").run()
+    check(not labels(at), "terug op 'Alle sets' zonder zoekterm: geen resultaten (zoals altijd)")
+
+    # --- L1: LOTJE als modus ----------------------------------------------------
+    at.segmented_control(key="modus").set_value("LOTJE").run()
+    kop("L1.", "Modus LOTJE", "uitleg bovenaan; geen snelknoppen, presets, vrije invoer of setfilter — alleen zoeken")
+    check(any("Meerdere kaarten voor één prijs" in m.value for m in at.markdown), "uitleg staat bovenaan")
+    check(not snelknoppen(at), "geen snelknoppen")
+    check(not knoppen(at, "vrij_knop") and not knoppen(at, "preset_"), "geen vrije invoer en geen presets")
+    check(not [sb for sb in at.selectbox if sb.key == "set_filter"], "geen setfilter in LOTJE")
+    check(not [ni for ni in at.number_input if ni.key == "mandje_totaal"],
+          "leeg lotje: nog geen bedragveld")
+    check(at.button(key="vastleggen").label == "VASTLEGGEN — LOTJE" and at.button(key="vastleggen").disabled,
+          f"knop heet VASTLEGGEN — LOTJE en staat uit zolang het lotje leeg is ({at.button(key='vastleggen').label!r})")
+
+    # --- L2: drie kaarten, één bedrag -----------------------------------------
+    at.text_input(key="zoekterm").set_value("umbreon").run()
+    check(all(x.startswith("+ ") for x in labels(at)), f"resultaten hebben een + ({[x.split(chr(10))[0] for x in labels(at)]})")
     kies(at, "umbreon vmax")
     kies(at, "charizard")
-    kop("L2.", "Twee kaarten in het lotje en €100 als totaal",
-        "prijskeuze staat op Totaalprijs (ook in de browser), vastleggen splitst naar rato en boekt per kaart")
-    check(at.segmented_control(key="prijs_modus").value == "Totaalprijs",
-          f"prijskeuze op Totaalprijs ({at.segmented_control(key='prijs_modus').value})")
-    check(echt_gekozen(at, "prijs_modus"), "en de browser ziet die keuze ook (default=)")
-    at.number_input(key="mandje_totaal").set_value(100.0).run()
+    kies(at, "umbreon v", filter_op="Umbreon V\n")
+    kop("L2.", "Drie kaarten in het lotje en €150 als totaal",
+        "één TOTAAL-veld, geen prijs per kaart, geen prijskeuze; vastleggen splitst naar rato en boekt per kaart")
+    check(len(at.session_state["mandje"]) == 3, f"drie kaarten in het lotje ({mandje_namen(at)})")
+    check(not prijsvelden(at), "geen prijsveld per kaart")
+    check(not [sc for sc in at.segmented_control if sc.key == "prijs_modus"], "geen Per kaart/Totaalprijs-keuze")
+    check(bool([ni for ni in at.number_input if ni.key == "mandje_totaal"]), "wél één TOTAAL-veld")
+    check(any("tc-totaal-label" in m.value for m in at.markdown), "met het label TOTAAL €")
+    at.number_input(key="mandje_totaal").set_value(150.0).run()
+    check(any("totaal <b>€ 150,00</b>" in m.value for m in at.markdown), "totaalregel toont € 150,00")
     at.button(key="vastleggen").click().run()
     r = [x for x in rijen(engine) if x["flag"] == "mandje-totaal"]
-    check(len(r) == 2, f"twee regels met flag mandje-totaal (kreeg {len(r)})")
-    check(abs(sum(float(x["bedrag"]) for x in r) - 100.0) < 0.005,
-          f"samen precies €100 ({[float(x['bedrag']) for x in r]})")
+    check(len(r) == 3, f"drie regels met flag mandje-totaal (kreeg {len(r)})")
+    check(abs(sum(float(x["bedrag"]) for x in r) - 150.0) < 0.005,
+          f"samen precies €150 ({[float(x['bedrag']) for x in r]})")
     check(len({x["group_id"] for x in r}) == 1 and r[0]["group_id"], "één group_id voor het lotje")
     check(all(x["item_id"] for x in r), "elke regel hangt aan een kaart (dus afboekbaar)")
-    check(at.session_state["lotje"] is False, "na vastleggen staat lotje weer uit")
-    check(at.button(key="lotje_knop").label.startswith("LOTJE — "), "en de knop staat weer op uit")
+    check(st_bevestiging(at) == "✓ Lotje vastgelegd — 3 kaarten, € 150,00",
+          f"bevestiging ({st_bevestiging(at)!r})")
+    check(at.session_state["modus"] == "LOTJE" and not at.session_state["mandje"],
+          "na vastleggen: leeg lotje, nog steeds in LOTJE")
+    check(not knoppen(at, "nogmaals_knop"), "geen 'nog een' na een lotje")
     uitkomst(*[toon(x) for x in r])
 
-    # --- L3: vrije invoer met 'lot' in de naam --------------------------------
+    # --- L3: vrije invoer met 'lot' in de naam (in VERKOOP) --------------------
+    at.segmented_control(key="modus").set_value("VERKOOP").run()
     at.text_input(key="vrij_naam").set_value("Lotje 30th").run()
-    kop("L3.", "Vrije invoer 'Lotje 30th'", "hint: gebruik LOTJE, dan worden de kaarten gekoppeld")
+    kop("L3.", "Vrije invoer 'Lotje 30th' in VERKOOP", "hint: gebruik de modus LOTJE")
     check(any("tc-lotje-hint" in m.value for m in at.markdown), "hint verschijnt bij 'lot' in de naam")
     at.text_input(key="vrij_naam").set_value("Pikachu promo").run()
     check(not any("tc-lotje-hint" in m.value for m in at.markdown), "en niet bij een gewone naam")
-
-    # --- L4: niet in TRADE -----------------------------------------------------
-    at.segmented_control(key="modus").set_value("TRADE").run()
-    check(not knoppen(at, "lotje_knop"), "in TRADE is er geen LOTJE-knop (geen prijs per kaart)")
+    check(not css_botsingen(at), f"geen CSS-botsingen ({css_botsingen(at)})")
     check(not at.exception, f"geen exception ({at.exception})")
     print()
 
@@ -1593,8 +1638,8 @@ def main():
     check(dagtotaal(at) == "Vandaag: verkoop € 0,00 · trades: 0",
           f"dagtotaal begint op nul ({dagtotaal(at)!r})")
     check(at.segmented_control(key="modus").options
-          == ["VERKOOP", "TRADE", "ZOEK"],
-          f"drie modi: verkoop, trade en opzoeken "
+          == ["VERKOOP", "LOTJE", "TRADE", "ZOEK"],
+          f"vier modi: verkoop, lotje, trade en opzoeken "
           f"({at.segmented_control(key='modus').options})")
 
     # --- zoeken -----------------------------------------------------------
