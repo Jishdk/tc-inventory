@@ -245,6 +245,58 @@ Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de ap
 leest de beursdagen nu uit het event zelf). Geen `TC_EVENT_NAAM` gezet; de app
 volgt de terugval en toont `boekt op: Cardmania XXL Rosmalen` (live gecheckt).
 
+### Weekendcyclus afgerond (zo 11-10 avond) — eindstand
+
+| | |
+|---|---|
+| `items` | **947**, **1500 stuks** (begin weekend 1458) |
+| voorraadwaarde (cm) | **€146.982,80** · verkoopwaarde €164.273,00 |
+| verkoop weekend | **€16.206** (za €8.406 / zo €7.800) over 73 regels, 68 afspraken |
+| trades | **9 afspraken**, cash €595 in / €155 bij = netto **+€440** |
+| afgeboekt | **80 regels = 86 stuks over 69 kaarten** (10 regels uit trades); 0 negatief |
+| omzet zonder voorraadmutatie | €1.495 (3 lotjes, zie twijfellijst) |
+| Excel ↔ database | **0 afwijkingen op 947 rijen**, alle velden (eindstand opnieuw geïmporteerd) |
+| items zonder enige prijs | 28 (de ongeprijsde weekendrijen 900–924 e.a.) |
+
+Backups: `data/backup/*_20261011_2032_voor_weekendcyclus.*`. Gereedschap:
+`scripts/weekend_v7_rosmalen.py` (fase `opschonen` vóór de import, fase
+`terugschrijven` erna; beide op XML-niveau). Twijfel en vragen voor het team:
+**`data/twijfel_weekend.csv`** (15 punten).
+
+**Het Drive-bestand kwam terug zónder de fixes van zaterdag.** Het team werkt in
+Google Sheets; `Inventory TC.xlsx` in de Windows-map is alleen de download. De
+kop A1 (`x\``), de vier samengevoegde rijen, Poliwrath/Prismatic SPC op 0 en de
+203 vaste waarden in L/O/P/Q waren allemaal terug. Fase `opschonen` past ze
+daarom opnieuw toe. **Les:** wat in het bestand gefixt moet blijven, moet in de
+Drive-sheet zelf gebeuren (of het bestand moet daarna geüpload worden).
+
+**Excel, weekendrijen 878–955 (78 nieuw):** samengevoegd als extra exemplaar
+(gelijke taal/conditie/categorie/promo): Alakazam 201/165, Poliwhirl 176/165
+EN, Machamp 1st 4/102, Blastoise base 2/102, Charizard 223/197, plus de vier
+van zaterdag. Apart gelaten (Promo = Sealed naast los): Mewtwo SWSH229,
+Alakazam 9, Lucario swsh291. Categorie `Single`/`slab` → `single`/`Slab`,
+`Psa 9` → `PSA 9`. ⚠️ **Rijen 900–924 (25, zonder prijs) lijken dezelfde
+stapel als 925–953 (mét prijs), door twee mensen ingevoerd** — beide
+geïmporteerd, niets verwijderd; vraag 1 op de twijfellijst. Flip-rijen 956
+Metang 094/086 en 957 Gwynn 117/081 (vrij ingevoerd, nooit in de Excel; cm =
+verkoopprijs, nu 0/0 met notitie in kolom S).
+
+**Transacties zondag (47 regels):** geen dubbele tikken. #742 "3 cd promos
+japanese slabs" €1.950 gesplitst in drie regels (group_id, naar rato comp) op
+de nieuwe JP PSA 9-slabs Charizard-holo/Venusaur-holo/Blastoise-holo. #771
+Shining mew → Shining mew comics-holo (rij 892). #774 → Magikarp 30th. #750/#751
+Garchomp V: in TRADE-modus geboekt met "+€70, kaart stond te hoog geprijst" en
+niets binnen → **verkoop €70**, cash-anker #751 `is_dubbel`. Niet koppelbaar:
+#719 poker-set €1.000, #765 Lotje 30th €375, #781 Lotje 30th €120
+(Meowth/Maushold niet eenduidig) — omzet telt, geen afboeking.
+
+**Nieuw tabblad "Weekend Rosmalen"** in de Excel: omzet per dag, top 10,
+per categorie (slabs 60%), korting t.o.v. comp (7,9%), trade-balans, drukste
+uur, dubbelingen, flips/lotjes, voorraadmutatie en vijf zinnen conclusie.
+Platte waarden, geen formules; fase `terugschrijven` bouwt 'm elke keer opnieuw.
+
+**Niet in deze sessie:** set-koppeling / zoeken op set (sessie 2).
+
 ### Tussencyclus na dag 1 (za 10-10, 's avonds) — NIET afgeboekt
 
 Bewust **niet afgeboekt**: dat gebeurt zondagavond voor het hele weekend in
