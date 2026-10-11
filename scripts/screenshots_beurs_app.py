@@ -232,7 +232,7 @@ def draaiboek(s: Scherm):
     s.klik("vastleggen"); s.shot("4-vastgelegd")
 
     print("screenshots — ZOEK")
-    s.klik("modus", 2)                       # VERKOOP, TRADE, ZOEK
+    s.klik("modus", 3)                       # VERKOOP, LOTJE, TRADE, ZOEK
     s.shot("5-zoek-leeg")
     s.zoek_kijk("umbreon"); s.shot("6-zoek-resultaten")
     # Een slab: alleen een cm-prijs, dus met de cm-badge en de uitleg erbij.
@@ -253,12 +253,27 @@ def draaiboek(s: Scherm):
     s.klik("modus", 0)
     s.shot("10-terug-in-verkoop"); s.vouw("leeg mandje na ZOEK")
 
-    print("screenshots — set-zoek in VERKOOP en LOTJE")
+    print("screenshots — set-zoek in VERKOOP, setfilter en LOTJE")
     s.typ("evs"); s.shot("13-verkoop-set-zoek")
     s.typ(""); s.pg.wait_for_timeout(500)
-    s.klik("lotje_knop"); s.shot("14-lotje-aan"); s.vouw("LOTJE aan, leeg mandje")
-    s.kies("umbreon"); s.kies("charizard"); s.shot("15-lotje-twee-kaarten")
-    s.vouw("LOTJE, 2 kaarten + totaalbedrag")
+
+    # ZOEK met de set-dropdown open, en gefilterd op één set
+    s.klik("modus", 3)
+    # Streamlit 1.60: de selectbox is een react-aria ComboBox met een <input>;
+    # een klik daarop opent de lijst, typen filtert, Enter kiest.
+    s.pg.click('[class*="st-key-kijk_set_filter"] input')
+    s.pg.wait_for_timeout(1200); s.shot("16-zoek-set-dropdown-open")
+    s.pg.keyboard.type("Evolving"); s.pg.keyboard.press("Enter")
+    s.pg.wait_for_timeout(2200); s.shot("17-zoek-gefilterd-op-set")
+    s.tel_zichtbaar("ZOEK, gefilterd op Evolving Skies")
+
+    # LOTJE: leeg, en met drie kaarten + bedrag
+    s.klik("modus", 1)
+    s.shot("14-lotje-leeg"); s.vouw("LOTJE leeg")
+    s.kies("umbreon"); s.kies("charizard"); s.kies("bulbasaur")
+    veld = s.pg.locator('[class*="st-key-mandje_totaal"] input')
+    veld.fill("150"); veld.press("Enter"); s.pg.wait_for_timeout(2200)
+    s.shot("15-lotje-drie-kaarten-bedrag"); s.vouw("LOTJE, 3 kaarten + totaalbedrag")
 
 
 if __name__ == "__main__":

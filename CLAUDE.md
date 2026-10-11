@@ -323,6 +323,40 @@ regels met kandidaten) is de nalooplijst; niets daarvan is geraden.
   609 px bij één kaart (was 594 — de LOTJE-knop), 826 px bij LOTJE met twee
   kaarten + totaalbedrag. Screenshots `screenshots/set-11…15*.png`.
 
+### LOTJE als modus + setfilter (12-10-2026, branch `lotje-modus`, wacht op go)
+
+- **Moduskeuze is nu vier:** VERKOOP · LOTJE · TRADE · ZOEK. De losse
+  LOTJE-knop van sessie 2 is weg. In LOTJE staat bovenaan één uitleg
+  (`tc-uitleg`), daaronder alleen de zoekbalk (resultaten met een `+` voor de
+  naam), de gekozen kaarten (naam · aantal · ✕), één groot veld **TOTAAL €**
+  (`mandje_totaal`, al vanaf de eerste kaart) en `VASTLEGGEN — LOTJE`. Geen
+  snelknoppen, presets, prijskeuze, setfilter, "nog een" of vrije invoer.
+  Onder de motorkap ongewijzigd: `TOTAALPRIJS` is waar zodra het lotje iets
+  bevat → naar rato comp, één `group_id`, flag `mandje-totaal`, per kaart
+  afgeboekt. De dubbel-check slaat LOTJE over. Bevestiging: "✓ Lotje
+  vastgelegd — N kaarten, € X" (via `_lotje_tekst`, opgepakt in `na_succes`).
+  Na vastleggen: leeg lotje, nog steeds in LOTJE.
+- **Setfilter** (`setopties()`): dropdown met "Alle sets" plus elke set die
+  in `items` voorkomt als "Evolving Skies (13)", gesorteerd op `set_jaar`
+  (nieuwste eerst), dan aantal. In ZOEK (`kijk_set_filter`) onder de zoekbalk;
+  in VERKOOP en TRADE (`set_filter`) compact onder de zoekbalk. Set gekozen
+  zonder term → de hele set op nummer; met term → alleen wat daarbinnen
+  matcht, op nummer. `_reset` zet `set_filter` terug op "Alle sets" na een
+  verkoop. Set-zoek via tekst ("evs") blijft werken.
+- ⚠️ **Zoekbalk niet in `st.columns` zetten.** Naast elkaar (zoekbalk +
+  dropdown in een kolommenrij) verliest `AppTest` de met `set_value` gezette
+  zoekterm in de eerste run na een undo — de "nog een"-knop erboven verschijnt
+  en verdwijnt per run, en een widget in een kolom daarachter raakt dan zijn
+  nieuwe waarde kwijt. Onder elkaar werkt het; vandaar de layout. In de
+  browser speelt dit niet, maar de tests zijn de vangrail.
+- Streamlit 1.60: een `selectbox` is een react-aria ComboBox met een
+  `<input>` (geen `[data-baseweb="select"]`). CSS via `[role="group"]` en
+  `input`; Playwright opent 'm met een klik op de `input`, typt en drukt Enter.
+- Tests **350 checks groen** (`set_en_lotje_tests`: F1/F2 setfilter, L1–L3
+  LOTJE). 390 px: VASTLEGGEN op 600 px bij één kaart (was 609 met de losse
+  LOTJE-knop, 594 ervoor), 807 px bij twee kaarten; LOTJE leeg 358 px, met
+  drie kaarten + bedrag 767 px. Screenshots `screenshots/modus-14…17*.png`.
+
 ## Beurs 10-11 oktober 2026 — Cardmania XXL Rosmalen (voorbereid 09-10)
 
 Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de app

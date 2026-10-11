@@ -54,7 +54,7 @@ AFZENDER = "TC"          # één gedeelde gebruiker
 # ZOEK is geen invoermodus maar een kijkmodus: prijs en voorraad opzoeken voor
 # een klant zonder iets vast te leggen. Hij staat achteraan omdat VERKOOP de
 # eerste positie hoort te houden — dat is de modus waar je standaard in staat.
-MODI = ["VERKOOP", "TRADE", "ZOEK"]
+MODI = ["VERKOOP", "LOTJE", "TRADE", "ZOEK"]
 PRIJS_MODI = ["Per kaart", "Totaalprijs"]
 # Wat de klant bijlegt of van ons krijgt. De richting staat in de knop zelf: geen
 # plus/min waar je op de beursvloer overheen kijkt en de trade omgekeerd inboekt.
@@ -214,10 +214,20 @@ BASIS_CSS = """
       background: var(--card); border: 1px solid var(--line);
       border-left: 4px solid var(--elev); border-radius: var(--r-sm);}
   [class*="st-key-snel_"] button:hover {border-left-color: var(--red-line);}
-  /* LOTJE: zichtbaar maar rustig — een keuze, geen alarm */
-  .st-key-lotje_knop button {min-height: 2.8rem; font-size: .9rem; font-weight: 700;
-      letter-spacing: .03em; border-radius: var(--r-sm);}
-  .st-key-lotje_knop button p {font-size: .9rem !important; font-weight: 700;}
+  /* LOTJE-uitleg: één rustig blok bovenaan, de rest van het scherm is kaal */
+  .tc-uitleg {background: var(--card); border: 1px solid var(--line);
+      border-left: 4px solid var(--elev); border-radius: var(--r-sm);
+      padding: .6rem .8rem; margin: .1rem 0 .3rem; font-size: .9rem;
+      line-height: 1.45; color: var(--text);}
+  .tc-uitleg b {color: var(--text);}
+  .tc-totaal-label {font-size: .78rem; font-weight: 700; color: var(--muted);
+      letter-spacing: .08em; text-transform: uppercase; margin: .3rem 0 -.2rem;}
+  /* setfilter: compact naast de zoekbalk (Streamlit 1.60: react-aria ComboBox) */
+  .st-key-set_filter [role="group"], .st-key-kijk_set_filter [role="group"] {
+      background: var(--card); border-color: var(--line); min-height: 2.6rem;}
+  .st-key-set_filter input, .st-key-kijk_set_filter input {font-size: .9rem;
+      color: var(--muted);}
+  .st-key-set_filter {margin-top: -.35rem;}
   [class*="st-key-snel_"] button p {white-space: pre-line; margin: 0;
       line-height: 1.3; font-size: .92rem; font-weight: 700; color: var(--text);}
   /* !important omdat Streamlit :gray[] zelf op rgba(250,250,250,.6) zet en met
@@ -588,7 +598,7 @@ TEKSTKOLOMMEN = ["onze_naam", "officiele_naam", "code", "set_code", "categorie",
 def laad_items() -> pd.DataFrame:
     df = lees("""
         SELECT id, onze_naam, officiele_naam, code, set_code, categorie, staat,
-               grade, taal, comp_prijs, prijs_cm, aantal, set_afk, set_naam
+               grade, taal, comp_prijs, prijs_cm, aantal, set_afk, set_naam, set_jaar
         FROM items ORDER BY officiele_naam NULLS LAST, onze_naam
     """)
     # Voorraad kan negatief zijn (er is meer verkocht dan de inventaris wist);
@@ -614,6 +624,26 @@ def laad_items() -> pd.DataFrame:
     # "TG13/TG30" -> (TG, 13). Zonder nummer achteraan.
     df["_nr"] = df["code"].map(kaartnummer)
     return df
+
+
+ALLE_SETS = "Alle sets"
+
+
+def setopties(df: pd.DataFrame) -> tuple[list[str], dict[str, str]]:
+    """Keuzes voor het setfilter: "Evolving Skies (13)", nieuwste set eerst.
+    Geeft (labels, label -> setnaam)."""
+    if "set_naam" not in df:
+        return [ALLE_SETS], {}
+    g = (df[df["set_naam"].notna()]
+         .groupby("set_naam", sort=False)
+         .agg(n=("id", "size"), jaar=("set_jaar", "max")))
+    g = g.sort_values(["jaar", "n"], ascending=[False, False], na_position="last")
+    labels, naar = [ALLE_SETS], {}
+    for naam, r in g.iterrows():
+        label = f"{naam} ({int(r['n'])})"
+        labels.append(label)
+        naar[label] = naam
+    return labels, naar
 
 
 def kaartnummer(code) -> tuple:
@@ -883,7 +913,21 @@ def normaliseer(s: str) -> str:
     return "".join(c for c in s if not unicodedata.combining(c)).lower()
 
 
-def zoek(df: pd.DataFrame, term: str) -> pd.DataFrame:
+def zoek(df: pd.DataFrame, term: str, setfilter: str | None = None) -> pd.DataFrame:
+    """Treffers voor een zoekterm, eventueel binnen één set (het dropdown-filter).
+
+    Met een setfilter is de set de wereld: zonder term alle kaarten van die set
+    op nummer, met term alleen wat daarbinnen op naam of code matcht — ook op
+    nummer, want binnen een set is dat de volgorde die je kent."""
+    if setfilter:
+        df = df[df["set_naam"] == setfilter]
+        tokens = [t for t in normaliseer(term).split() if t]
+        if not tokens:
+            return df.sort_values(["_nr", "naam"])
+        masker = pd.Series(True, index=df.index)
+        for t in tokens:
+            masker &= df["zoek"].str.contains(t, regex=False, na=False)
+        return df[masker].sort_values(["_nr", "naam"])
     tokens = [t for t in normaliseer(term).split() if t]
     if not tokens:
         return df.iloc[0:0]
@@ -955,11 +999,13 @@ def prijs_label(rij) -> tuple[str, bool]:
 
 
 def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
-                  leeg_tekst: str):
-    """Zoekresultaten als knoppen; geeft de aangeklikte rij terug (of None)."""
-    treffers = zoek(df, term)
+                  leeg_tekst: str, setfilter: str | None = None, plus: bool = False):
+    """Zoekresultaten als knoppen; geeft de aangeklikte rij terug (of None).
+    `plus` zet een + voor de naam: in LOTJE betekent een tik "erbij", niet
+    "dit is de verkoop"."""
+    treffers = zoek(df, term, setfilter)
     with st.container(key=container_key):
-        setnaam = set_van(df, term)
+        setnaam = setfilter or set_van(df, term)
         if setnaam:
             n_set = int((df["set_naam"] == setnaam).sum())
             st.markdown(f'<div class="tc-set-kop">set <b>{html.escape(setnaam)}</b> — '
@@ -974,7 +1020,8 @@ def toon_treffers(df: pd.DataFrame, term: str, prefix: str, container_key: str,
                                             prijs, voorraad_tekst(r["aantal"])] if x)
             # Zachte regelafbreking (\n) + CSS `white-space: pre-line` geeft de
             # tweede regel; :gray[] maakt er een span van die klein wordt gezet.
-            if st.button(f"{r['naam']}\n:gray[{detail}]", key=f"{prefix}{r['id']}",
+            naam = f"+ {r['naam']}" if plus else r["naam"]
+            if st.button(f"{naam}\n:gray[{detail}]", key=f"{prefix}{r['id']}",
                          width="stretch"):
                 return r
         if treffers.empty:
@@ -1001,21 +1048,27 @@ def toon_kijken(df: pd.DataFrame):
     dat verschil niet in de kleine lettertjes staan."""
     st.text_input("Zoek kaart", key="kijk_zoekterm", placeholder="zoek kaart",
                   label_visibility="collapsed")
+    # Setfilter: alle sets die in de inventaris voorkomen, nieuwste eerst, met
+    # het aantal kaarten erbij. Combineert met de zoekbalk: set + naam.
+    labels, naar_set = setopties(df)
+    st.selectbox("Set", labels, key="kijk_set_filter", label_visibility="collapsed")
+    setfilter = naar_set.get(st.session_state.get("kijk_set_filter") or "")
     st.markdown('<div class="tc-note">alleen opzoeken — er wordt niets '
                 'vastgelegd</div>', unsafe_allow_html=True)
 
     term = st.session_state.get("kijk_zoekterm") or ""
-    if len(term.strip()) < 2:
+    if len(term.strip()) < 2 and not setfilter:
         st.caption("Typ een naam, een stuk van de code of een set — bijvoorbeeld "
-                   "**umbreon**, **215**, **evs** of **evolving skies**.")
+                   "**umbreon**, **215**, **evs** of **evolving skies** — of kies "
+                   "een set in de lijst.")
         return
 
-    treffers = zoek(df, term)
+    treffers = zoek(df, term, setfilter)
     if treffers.empty:
         st.caption("Niets gevonden. Probeer een kortere term, of een stuk van "
                    "de kaartcode.")
         return
-    setnaam = set_van(df, term)
+    setnaam = setfilter or set_van(df, term)
     if setnaam:
         n_set = int((df["set_naam"] == setnaam).sum())
         st.markdown(f'<div class="tc-set-kop">set <b>{html.escape(setnaam)}</b> — '
@@ -1115,10 +1168,6 @@ def init_state():
     # Is dit mandje via "nog een" gevuld? Dan is de herhaling gewild en hoeft de
     # dubbel-check er niet naar te vragen.
     st.session_state.setdefault("bewust_herhaald", False)
-    # LOTJE: meerdere kaarten voor één bedrag. Technisch is dat het mandje in
-    # Totaalprijs-modus — dat bestond al, maar niemand vond het. De knop zet
-    # alleen deze vlag; de prijskeuze krijgt er zijn `default=` van.
-    st.session_state.setdefault("lotje", False)
 
     # Widget-state opruimen kan alleen vóórdat de widgets van deze run bestaan;
     # daarom zetten de knoppen hieronder een vlag en gebeurt het werk hier.
@@ -1146,8 +1195,10 @@ def init_state():
         # ongemerkt de verkeerde kant op.
         st.session_state["onderhandeld_keuze"] = None
         st.session_state["bewust_herhaald"] = False
-        st.session_state["lotje"] = False
         st.session_state.pop("prijs_modus", None)
+        # Het setfilter gaat ook terug op "alle": de volgende klant vraagt
+        # meestal iets anders, en een filter dat blijft hangen verbergt kaarten.
+        st.session_state["set_filter"] = ALLE_SETS
         st.session_state.pop("cash_richting", None)
         st.session_state["dubbel_vraag"] = None
 
@@ -1259,6 +1310,8 @@ def mandje_totaal() -> float:
     dat met de klant is afgesproken — dan wordt er niets vermenigvuldigd, want
     dat bedrag geldt al voor de hele stapel."""
     mandje = st.session_state["mandje"]
+    if st.session_state.get("modus") == "LOTJE" and mandje:
+        return float(st.session_state.get("mandje_totaal") or 0)
     if st.session_state.get("prijs_modus") == "Totaalprijs" and len(mandje) > 1:
         return float(st.session_state.get("mandje_totaal") or 0)
     return sum(float(r["bedrag"]) * regel_stuks(r["rid"]) for r in mandje)
@@ -1266,7 +1319,8 @@ def mandje_totaal() -> float:
 
 def na_succes(naam: str, bedrag: float, tx_ids: list[int] | None = None,
               herhaal: list[dict] | None = None):
-    st.session_state["bevestiging"] = f"✓ Vastgelegd — {naam} · € {geld(bedrag)}"
+    st.session_state["bevestiging"] = (st.session_state.pop("_lotje_tekst", None)
+                                       or f"✓ Vastgelegd — {naam} · € {geld(bedrag)}")
     # Wat er net wegging, om het met één tik nog eens te kunnen doen. Vijf keer
     # hetzelfde pakje aan vijf klanten is op een beurs eerder regel dan
     # uitzondering, en dan is opnieuw zoeken puur tikwerk.
@@ -1402,6 +1456,12 @@ if len(MODI) > 1:
 MODUS = st.session_state["modus"] or "VERKOOP"
 TRADE = MODUS == "TRADE"
 KIJKEN = MODUS == "ZOEK"
+# LOTJE: meerdere kaarten voor één prijs. Onder de motorkap het mandje in
+# Totaalprijs-modus (naar rato comp, één group_id, per kaart afgeboekt); het
+# scherm laat alleen zien wat daarvoor nodig is. Op Rosmalen gingen drie lotjes
+# als vrije tekst de database in (€1.495) zonder één afgeboekte kaart — niet
+# omdat de functie ontbrak, maar omdat niemand 'm vond.
+LOTJE = MODUS == "LOTJE"
 TX_TYPE = "trade" if TRADE else "verkoop"
 
 # ------------------------------------------------------------------ zoekmodus
@@ -1434,7 +1494,7 @@ if st.session_state["bevestiging"]:
 # zolang het mandje leeg is — met iets in het mandje zou de knop er een tweede
 # stapel bovenop gooien en dat is niet wat "nog een" betekent.
 _nogmaals = st.session_state.get("nogmaals")
-if _nogmaals and not st.session_state["mandje"]:
+if _nogmaals and not st.session_state["mandje"] and not LOTJE:
     _label = (_nogmaals[0]["naam"] if len(_nogmaals) == 1
               else f"{len(_nogmaals)} kaarten")
     if st.button(f"↻ Nog een — {_label[:34]}", key="nogmaals_knop", width="stretch"):
@@ -1485,7 +1545,13 @@ mandje = st.session_state["mandje"]
 # Boven de zoekbalk, want voor deze paar is zoeken de omweg. Drie per rij:
 # Streamlit's kolommen wrappen niet, en op 390 px is dat de breedte waarop de
 # tekst nog leesbaar blijft.
-snel_gevonden, snel_mislukt = zoek_snelknoppen(items)
+# In LOTJE geen snelknoppen, geen presets, geen vrije invoer: alleen zoeken,
+# aantikken, één bedrag, vastleggen. Alles wat er niet toe doet is weg.
+snel_gevonden, snel_mislukt = zoek_snelknoppen(items) if not LOTJE else ([], [])
+if LOTJE:
+    st.markdown('<div class="tc-uitleg"><b>Meerdere kaarten voor één prijs.</b> '
+                'Zoek een kaart, tik <b>+</b> bij elke kaart, vul onderaan het '
+                'totaalbedrag in.</div>', unsafe_allow_html=True)
 for begin in range(0, len(snel_gevonden), SNELKNOPPEN_PER_RIJ):
     rij = snel_gevonden[begin:begin + SNELKNOPPEN_PER_RIJ]
     kolommen = st.columns(SNELKNOPPEN_PER_RIJ, vertical_alignment="center")
@@ -1509,36 +1575,28 @@ if snel_mislukt:
     st.markdown(f'<div class="tc-note">Snelknop zonder eenduidige kaart: {uitleg}'
                 f'</div>', unsafe_allow_html=True)
 
-# --- LOTJE: meerdere kaarten, één bedrag ---------------------------------
-# Niets nieuws onder de motorkap: dit is het mandje in Totaalprijs-modus, dat
-# naar rato van de comp-prijs verdeelt en per kaart afboekt. Het bestond al,
-# maar zat verstopt achter een keuzebalk die pas bij de tweede kaart verschijnt.
-# Rosmalen: drie lotjes (€1.495) als vrije tekst, zonder één afgeboekte kaart.
-if not TRADE:
-    LOTJE = st.session_state["lotje"]
-    label = ("LOTJE aan — tik de kaarten aan, vul onderaan één bedrag in"
-             if LOTJE else "LOTJE — meerdere kaarten, één bedrag")
-    if st.button(label, key="lotje_knop", width="stretch",
-                 type="primary" if LOTJE else "secondary"):
-        st.session_state["lotje"] = not LOTJE
-        if not LOTJE:
-            st.session_state["prijs_modus"] = PRIJS_MODI[1]
-        else:
-            st.session_state.pop("prijs_modus", None)
-        st.rerun()
-    if LOTJE:
-        st.markdown('<div class="tc-note">zoek en tik elke kaart van het lotje aan; '
-                    'VASTLEGGEN verdeelt het bedrag naar rato over de kaarten en '
-                    'boekt ze af</div>', unsafe_allow_html=True)
+if LOTJE:
+    st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
+                  label_visibility="collapsed")
+    SETFILTER = None
 else:
-    LOTJE = False
-
-st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
-              label_visibility="collapsed")
+    # Zoekbalk met daaronder een compact setfilter ("alles van Obsidian
+    # Flames"). Niet naast elkaar in kolommen: de "nog een"-knop erboven
+    # verschijnt en verdwijnt per run, en een zoekbalk in een kolom daarachter
+    # verliest headless de zojuist gezette waarde (AppTest-eigenaardigheid,
+    # zie CLAUDE.md). Onder elkaar meet de kernflow nog steeds lager dan ervoor,
+    # omdat de losse LOTJE-knop weg is.
+    st.text_input("Zoek kaart", key="zoekterm", placeholder="zoek kaart",
+                  label_visibility="collapsed")
+    labels, naar_set = setopties(items)
+    st.selectbox("Set", labels, key="set_filter", label_visibility="collapsed")
+    SETFILTER = naar_set.get(st.session_state.get("set_filter") or "")
 term = st.session_state.get("zoekterm", "")
-if len(term.strip()) >= 2:
+if len(term.strip()) >= 2 or SETFILTER:
     gekozen = toon_treffers(items, term, "pick_", "resultaten",
-                            "Niets gevonden — gebruik *vrij invoeren* hieronder.")
+                            "Niets gevonden — gebruik *vrij invoeren* hieronder."
+                            if not LOTJE else "Niets gevonden.",
+                            setfilter=SETFILTER, plus=LOTJE)
     if gekozen is not None:
         r = als_dict(gekozen)
         voeg_toe(item_id=r["id"], naam=r["naam"], kenmerk=r["kenmerk"],
@@ -1549,11 +1607,12 @@ if len(term.strip()) >= 2:
 
 # Bij een trade hangt het geld aan de afspraak, niet aan de losse kaart; de
 # prijskeuze hoort daar dus niet.
-TOTAALPRIJS = (not TRADE and len(mandje) > 1
-               and st.session_state.get("prijs_modus") == "Totaalprijs")
+TOTAALPRIJS = ((LOTJE and bool(mandje))
+               or (not TRADE and not LOTJE and len(mandje) > 1
+                   and st.session_state.get("prijs_modus") == "Totaalprijs"))
 
-if len(mandje) > 1 or (TRADE and mandje):
-    kop = "Onze kaarten eruit" if TRADE else "Mandje"
+if len(mandje) > 1 or ((TRADE or LOTJE) and mandje):
+    kop = "Onze kaarten eruit" if TRADE else "Lotje" if LOTJE else "Mandje"
     st.markdown(f'<div class="tc-teller">{kop}: <b>{len(mandje)}</b> '
                 f'{"kaart" if len(mandje) == 1 else "kaarten"}</div>',
                 unsafe_allow_html=True)
@@ -1625,9 +1684,12 @@ for regel in mandje:
                         unsafe_allow_html=True)
 
 if not mandje:
-    st.caption("Zoek een kaart om te beginnen — of gebruik **vrij invoeren** "
-               "hieronder als hij er niet in staat."
-               + (" Dit zijn de kaarten die **wij** weggeven." if TRADE else ""))
+    if LOTJE:
+        st.caption("Nog geen kaarten in het lotje — zoek hierboven en tik **+**.")
+    else:
+        st.caption("Zoek een kaart om te beginnen — of gebruik **vrij invoeren** "
+                   "hieronder als hij er niet in staat."
+                   + (" Dit zijn de kaarten die **wij** weggeven." if TRADE else ""))
 
 # --- prijs-presets en de onderhandeld-vlag ---------------------------------
 # Eén rij voor het hele mandje in plaats van een rij per kaart: dat scheelt op een
@@ -1675,15 +1737,20 @@ if TRADE:
     st.text_input("Binnenkomend", key="binnen_notitie",
                   placeholder="wat komt er binnen? bv: 5 kaarten, zie WA-foto",
                   label_visibility="collapsed")
+elif LOTJE:
+    # Eén groot bedrag, zonder keuze: in een lotje is er per definitie één prijs.
+    if mandje:
+        st.markdown('<div class="tc-totaal-label">Totaal €</div>', unsafe_allow_html=True)
+        st.number_input("Totaal", min_value=0.0, step=0.50, format="%.2f",
+                        key="mandje_totaal", label_visibility="collapsed")
 elif len(mandje) > 1:
     # Pas vanaf twee kaarten een keuze: bij één kaart is de prijs van die kaart
-    # al het totaal, en zou de knop alleen maar ruimte kosten.
-    # In LOTJE begint de keuze op Totaalprijs. Via `default=`, niet alleen via
-    # session_state: deze balk verschijnt pas bij de tweede kaart, en een waarde
-    # die dan al in session_state staat komt niet bij de browser aan.
+    # al het totaal, en zou de knop alleen maar ruimte kosten. Via `default=`:
+    # deze balk verschijnt pas bij de tweede kaart, en een waarde die dan al in
+    # session_state staat komt niet bij de browser aan.
     st.segmented_control("Prijs", PRIJS_MODI, key="prijs_modus",
-                         default=PRIJS_MODI[1] if LOTJE else PRIJS_MODI[0],
-                         width="stretch", label_visibility="collapsed", required=True)
+                         default=PRIJS_MODI[0], width="stretch",
+                         label_visibility="collapsed", required=True)
     if TOTAALPRIJS:
         st.number_input("Afgesproken totaalbedrag", min_value=0.0, step=0.50,
                         format="%.2f", key="mandje_totaal",
@@ -1698,7 +1765,7 @@ if TRADE and mandje:
     st.markdown(f'<div class="tc-totaal">{STUKS_TOTAAL} kaarten eruit '
                 f'&nbsp;·&nbsp; cash <b>{teken}€ {geld(abs(CASH))}</b></div>',
                 unsafe_allow_html=True)
-elif len(mandje) > 1 and TOTAAL > 0:
+elif (len(mandje) > 1 or LOTJE) and TOTAAL > 0:
     st.markdown(f'<div class="tc-totaal">{STUKS_TOTAAL} kaarten &nbsp;·&nbsp; '
                 f'totaal <b>€ {geld(TOTAAL)}</b></div>', unsafe_allow_html=True)
 
@@ -1723,6 +1790,8 @@ else:
 
 if TRADE:
     knoplabel = f"VASTLEGGEN — TRADE ({len(mandje)} eruit)"
+elif LOTJE:
+    knoplabel = "VASTLEGGEN — LOTJE"
 elif len(mandje) > 1:
     knoplabel = f"VASTLEGGEN — {len(mandje)} KAARTEN"
 else:
@@ -1739,7 +1808,7 @@ if (klik or bevestigd) and mandje:
         eerste = mandje[0]
         al_gezien = (lijkt_dubbel(recent_voor_check, eerste["id"], TOTAAL,
                                   eerste["naam"])
-                     if klik and not TRADE and len(mandje) == 1
+                     if klik and not TRADE and not LOTJE and len(mandje) == 1
                      and not st.session_state.get("bewust_herhaald") else None)
         if al_gezien:
             st.session_state["dubbel_vraag"] = {
@@ -1794,7 +1863,12 @@ if (klik or bevestigd) and mandje:
             # Alleen bij verkoop: een trade tweemaal doen betekent dezelfde
             # kaarten nóg eens weggeven, en de cash en de binnenkomst horen er
             # dan toch bij getypt te worden.
-            herhaal = None if TRADE else [
+            if LOTJE:
+                # Eigen bevestiging: "N kaarten, €X" — en geen "nog een", een
+                # lotje herhaal je niet.
+                st.session_state["_lotje_tekst"] = (
+                    f"✓ Lotje vastgelegd — {STUKS_TOTAAL} kaarten, € {geld(TOTAAL)}")
+            herhaal = None if (TRADE or LOTJE) else [
                 {"id": r["id"], "naam": r["naam"], "kenmerk": r["kenmerk"],
                  "conditie": r["conditie"], "staat": r.get("staat"),
                  "grade": r.get("grade"), "voorraad": r["voorraad"],
@@ -1815,31 +1889,34 @@ if (klik or bevestigd) and mandje:
                 str(e)[:800])
 
 # --- vangnet ---------------------------------------------------------------
-with st.expander("Kaart staat er niet in → vrij invoeren"):
-    st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
-                  label_visibility="collapsed")
-    if "lot" in normaliseer(st.session_state.get("vrij_naam") or ""):
-        # Een lotje als vrije tekst is omzet zonder afboeking — precies wat op
-        # Rosmalen drie keer misging. Wijzen, niet blokkeren: soms is het echt
-        # iets wat niet in de inventaris staat.
-        st.markdown('<div class="tc-note tc-lotje-hint">een lotje? gebruik '
-                    '<b>LOTJE</b> boven de zoekbalk, dan worden de kaarten '
-                    'gekoppeld en afgeboekt</div>', unsafe_allow_html=True)
-    # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
-    # aan de inventaris te koppelen — hij heeft geen item_id.
-    st.text_input("Code", key="vrij_code",
-                  placeholder="code, bijv. 173/195 of swsh260 (mag leeg)",
-                  label_visibility="collapsed")
-    if st.button("+ in het mandje", type="primary", width="stretch",
-                 key="vrij_knop"):
-        naam = (st.session_state.get("vrij_naam") or "").strip()
-        if not naam:
-            st.error("Vul een naam in.")
-        else:
-            voeg_toe(item_id=None, naam=naam,
-                     code=(st.session_state.get("vrij_code") or "").strip())
-            st.session_state["_leeg_vrij"] = True
-            st.rerun()
+# Niet in LOTJE: een lotje bestaat uit kaarten die in de inventaris staan, anders
+# valt er niets af te boeken.
+if not LOTJE:
+    with st.expander("Kaart staat er niet in → vrij invoeren"):
+        st.text_input("Naam", key="vrij_naam", placeholder="naam kaart of product",
+                      label_visibility="collapsed")
+        if "lot" in normaliseer(st.session_state.get("vrij_naam") or ""):
+            # Een lotje als vrije tekst is omzet zonder afboeking — precies wat op
+            # Rosmalen drie keer misging. Wijzen, niet blokkeren: soms is het echt
+            # iets wat niet in de inventaris staat.
+            st.markdown('<div class="tc-note tc-lotje-hint">een lotje? gebruik '
+                        'de modus <b>LOTJE</b> bovenaan, dan worden de kaarten '
+                        'gekoppeld en afgeboekt</div>', unsafe_allow_html=True)
+        # Code is optioneel, maar wél het enige haakje om deze regel later alsnog
+        # aan de inventaris te koppelen — hij heeft geen item_id.
+        st.text_input("Code", key="vrij_code",
+                      placeholder="code, bijv. 173/195 of swsh260 (mag leeg)",
+                      label_visibility="collapsed")
+        if st.button("+ in het mandje", type="primary", width="stretch",
+                     key="vrij_knop"):
+            naam = (st.session_state.get("vrij_naam") or "").strip()
+            if not naam:
+                st.error("Vul een naam in.")
+            else:
+                voeg_toe(item_id=None, naam=naam,
+                         code=(st.session_state.get("vrij_code") or "").strip())
+                st.session_state["_leeg_vrij"] = True
+                st.rerun()
 
 # ------------------------------------------------------------------ undo
 
