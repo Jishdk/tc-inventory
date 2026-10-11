@@ -245,6 +245,47 @@ Event **27** (10-10 t/m 11-10, Rosmalen; `eind_datum` uit migratie 011 — de ap
 leest de beursdagen nu uit het event zelf). Geen `TC_EVENT_NAAM` gezet; de app
 volgt de terugval en toont `boekt op: Cardmania XXL Rosmalen` (live gecheckt).
 
+### Antwoorden op de twijfellijst verwerkt (11-10, laat) — definitieve eindstand
+
+| | |
+|---|---|
+| `items` | **919**, **1470 stuks** |
+| voorraadwaarde (cm) | **€146.830,55** · verkoopwaarde €164.087,00 |
+| verkoop weekend | **€16.206** over 78 regels (incl. het gesplitste lotje), 68 afspraken |
+| afgeboekt | **86 regels** (80 + 6 uit lotje #781); tweede run = 0 |
+| Excel ↔ database | **0 afwijkingen op 919 rijen**, alle velden |
+| nog ongekoppeld | 2: poker-set #719 €1.000 en Lotje 30th #765 €375 (bewust) |
+| zonder enige prijs | 6, alle met notitie **NOG COMPEN** |
+
+Fase `antwoorden` in `scripts/weekend_v7_rosmalen.py` (plus `analyse` voor de
+JSON van de tab; de vijf conclusiezinnen staan in `data/weekend_rosmalen_mening.json`).
+Wat er is gebeurd, per vraag uit `data/twijfel_weekend.csv`:
+
+1. Rijen **900–922 leeggemaakt** (23 ongeprijsde dubbelen); 923 (burgerchu-slab)
+   en 924 (Charizard & Braixen-slab) blijven, zie 6. Umbreon/Sylveon op 1.
+2. Machamp 1st / Blastoise base: aantal 2 blijft.
+3. **Eevee swsh087 weer twee rijen**: 322 (los, 2 stuks na de verkoop) en 842
+   (Promo = Sealed, 1 stuk, notitie in S). Let op: ook rij 322 draagt in het
+   bestand `Promo = Sealed` — niet aangeraakt, team weet welke de losse is.
+4. Mewtwo SWSH229, Alakazam 9, Lucario swsh291 apart gelaten.
+5. Samengevoegd met Promo = Ja op de bestaande rij: Magneton 159 (2), Greninja
+   gold star swsh144 (5), Dark Sylveon swsh134 (1), Espeon 175 (2). **Pikachu &
+   Zekrom SM168: de single (rij 940, Promo Ja) blijft een eigen rij naast de
+   PSA 10-slab op rij 840** — "samenvoegen" is gelezen als 912+940 (912 was de
+   ongeprijsde dubbel); een single in een slab-rij persen kan niet.
+6. 954 (McDonalds Pikachu) leeg, 923 blijft als Slab. 955 single én 924 slab
+   blijven. NOG COMPEN op 943, 948, 949 (cm €1 gewist), 955, en ook op 923/924.
+7. Cubone-code `0407/04'` → `0407/04`.
+8. Poker-set €1.000: omzet zonder mutatie, blijft zo.
+9. **Lotje 30th €375 (#765) overgeslagen**: `ruwe_tekst` is letterlijk
+   "Lotje 30th", er staan géén kaartnamen in — niets te matchen.
+10. **Lotje 30th €120 (#781) gesplitst** over Pikachu 30th €46,94 / Maushold
+    226/193 €51,62 / Meowth 144/128 €8,04 / Hisuian Zorua €4,69 / Morpeko €4,69
+    / Chandelure 137/128 €4,02 (naar rato comp, één group_id) en afgeboekt.
+    Rij 899 "Meowth 30th" is in rij 871 opgegaan (2 → 1 na het lotje).
+11–14. Bevestigd, al toegepast (Garchomp verkoop €70, CD-slabs, Glaceon, flips).
+15. **Eevee Chinees: uit v7 gehaald door team, onbevestigd.** Niet teruggezet.
+
 ### Weekendcyclus afgerond (zo 11-10 avond) — eindstand
 
 | | |

@@ -93,6 +93,14 @@ def getal(v):
     return None if v in (None, "") else v
 
 
+def num0(v):
+    """Aantal-cel als getal; Google Sheets levert soms een tekst-'1'."""
+    try:
+        return float(v) if v not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def herreken_dashboard(stukken, kol_data):
     """Caches van het Dashboard herrekenen tegen de (aangepaste) kolominhoud.
     Twee rondes: de tweede pakt de afgeleide cellen (E5-B5, …) mee."""
@@ -398,7 +406,9 @@ def voeg_weekendtab_toe(stukken, blokken):
              f'<sheetPr><tabColor rgb="FFF20519"/></sheetPr>{cols}<sheetData>{"".join(rijen)}</sheetData></worksheet>')
     stukken["xl/worksheets/sheet4.xml"] = sheet.encode("utf-8")
     wbx = stukken["xl/workbook.xml"].decode("utf-8")
-    assert 'name="Weekend Rosmalen"' not in wbx
+    if 'name="Weekend Rosmalen"' in wbx:
+        print(f"tab 'Weekend Rosmalen' vernieuwd ({r - 1} rijen)")
+        return
     wbx = wbx.replace("</sheets>", '<sheet state="visible" name="Weekend Rosmalen" sheetId="4" r:id="rId8"/></sheets>')
     stukken["xl/workbook.xml"] = wbx.encode("utf-8")
     rels = stukken["xl/_rels/workbook.xml.rels"].decode("utf-8")
@@ -411,9 +421,230 @@ def voeg_weekendtab_toe(stukken, blokken):
     print(f"tab 'Weekend Rosmalen' toegevoegd ({r - 1} rijen)")
 
 
+# ---------------------------------------------------------------- fase 3
+
+# vraag 1: 900–922 zijn de ongeprijsde dubbelen; 923 (burgerchu-slab, blijft als
+# samenvoegtarget van 954) en 924 (Charizard & Braixen-slab, apart van 955) blijven.
+LEEG_ANTWOORDEN = set(range(900, 923)) | {954}
+# bestaande rij -> (nieuwe rij, extra stuks, promo op de bestaande rij)
+SAMENVOEGEN_ANTWOORDEN = {
+    114: (930, 1, "Ja"),    # Magneton 159
+    335: (944, 1, "Ja"),    # Greninja gold star swsh144
+    102: (942, 1, "Ja"),    # Dark Sylveon swsh134
+    741: (937, 1, "Ja"),    # Espeon 175
+    871: (899, 1, None),    # Meowth 144/128 (rij 899 "Meowth 30th" is dezelfde kaart)
+}
+EEVEE_BESTAAND, EEVEE_NIEUW = 322, 842                   # vraag 3: samenvoeging ongedaan
+NOG_COMPEN = {948: True, 949: True, 943: False, 955: False,   # True = cm-plaatshouder €1 wissen
+              923: False, 924: False}                         # ongeprijsde slabs
+CODE_FIX = {881: "0407/04"}
+
+
+def antwoorden(bron: Path, doel: Path):
+    """Verwerkt de antwoorden op data/twijfel_weekend.csv in de eindstand-Excel."""
+    wb = openpyxl.load_workbook(bron, data_only=True)
+    inv = wb["Inventaris"]
+    assert inv["A1"].value == "Naam"
+    for r in LEEG_ANTWOORDEN:
+        assert inv.cell(r, 1).value, r
+    for oud, (nieuw, extra, promo) in SAMENVOEGEN_ANTWOORDEN.items():
+        assert (inv.cell(nieuw, 10).value or 0) == extra, (nieuw, inv.cell(nieuw, 10).value)
+        assert str(inv.cell(oud, 2).value).strip().lower() == str(inv.cell(nieuw, 2).value).strip().lower(), (oud, nieuw)
+    assert inv.cell(EEVEE_BESTAAND, 1).value == "Eevee" and inv.cell(EEVEE_BESTAAND, 10).value == 3
+    assert inv.cell(EEVEE_NIEUW, 1).value in (None, "")
+    stukken = lees(bron)
+    xml = stukken[SHEET].decode("utf-8")
+    n2 = re.search(r'<c r="N2"[^>]*><f[^>]*>(.*?)</f>', xml, re.S).group(1)
+    leeg = LEEG_ANTWOORDEN | {n for n, _, _ in SAMENVOEGEN_ANTWOORDEN.values()}
+    verslag = []
+
+    def per_rij(m):
+        nr = int(m.group(1))
+        rij = origineel = m.group(0)
+        cellen = _cellen(rij)
+        naam = inv.cell(nr, 1).value
+        if nr == EEVEE_NIEUW:
+            n_f = re.sub(r"\$([A-Z])2\b", rf"$\g<1>{nr}", n2)
+            cellen_xml = [
+                tekst_cel(None, f"A{nr}", "Eevee").replace("<c ", '<c s="53" ', 1),
+                tekst_cel(None, f"B{nr}", "SWSH087").replace("<c ", '<c s="53" ', 1),
+                tekst_cel(None, f"D{nr}", "EN").replace("<c ", '<c s="54" ', 1),
+                tekst_cel(None, f"E{nr}", "single").replace("<c ", '<c s="54" ', 1),
+                tekst_cel(None, f"F{nr}", "Sealed").replace("<c ", '<c s="54" ', 1),
+                tekst_cel(None, f"H{nr}", "NM").replace("<c ", '<c s="54" ', 1),
+                f'<c r="J{nr}" s="55"><v>1</v></c>', f'<c r="K{nr}" s="55"><v>1</v></c>',
+                formule_cel(None, f"L{nr}", FORMULES["L"].format(n=nr), 0).replace("<c ", '<c s="55" ', 1),
+                f'<c r="M{nr}" s="56"><v>4</v></c>',
+                f'<c r="N{nr}" s="57"><v>6</v></c>',          # comp met de hand, zoals het team deed
+                formule_cel(None, f"O{nr}", FORMULES["O"].format(n=nr), 4).replace("<c ", '<c s="57" ', 1),
+                formule_cel(None, f"P{nr}", FORMULES["P"].format(n=nr), 6).replace("<c ", '<c s="57" ', 1),
+                formule_cel(None, f"Q{nr}", FORMULES["Q"].format(n=nr), "Op voorraad").replace("<c ", '<c s="58" ', 1),
+                tekst_cel(None, f"S{nr}", "11-10: samenvoeging met rij 322 ongedaan gemaakt — dit is de sealed promo, rij 322 de losse").replace("<c ", '<c s="53" ', 1),
+            ]
+            verslag.append(f"rij {nr} Eevee SWSH087 (Sealed): hersteld als eigen rij")
+            return f'<row r="{nr}">{"".join(cellen_xml)}</row>'
+        if naam in (None, ""):
+            return rij
+        if nr in leeg:
+            for kol, cel in cellen.items():
+                rij = rij.replace(cel, leeg_met_cache(cel), 1)
+            verslag.append(f"rij {nr} {naam}: leeggemaakt")
+            controleer(rij, cellen, nr)
+            return rij
+        j = k = num0(inv.cell(nr, 10).value)
+        m_, n_ = getal(inv.cell(nr, 13).value), getal(inv.cell(nr, 14).value)
+        if nr in SAMENVOEGEN_ANTWOORDEN:
+            nieuw, extra, promo = SAMENVOEGEN_ANTWOORDEN[nr]
+            j = k = j + extra
+            if promo:
+                rij = _zet_cel(rij, f"F{nr}", tekst_cel(cellen.get("F"), f"F{nr}", promo))
+            verslag.append(f"rij {nr} {naam}: aantal -> {j:g}" + (f", Promo = {promo}" if promo else ""))
+        if nr == EEVEE_BESTAAND:
+            j = k = j - 1
+            verslag.append(f"rij {nr} {naam}: aantal -> {j:g} (de sealed promo staat weer op rij {EEVEE_NIEUW})")
+        if nr in NOG_COMPEN:
+            if NOG_COMPEN[nr]:
+                rij = _zet_cel(rij, f"M{nr}", f'<c r="M{nr}" s="56"/>')
+                m_ = None
+            rij = _zet_cel(rij, f"S{nr}", tekst_cel(cellen.get("S"), f"S{nr}", "NOG COMPEN"))
+            if cellen.get("N") and "<f" in cellen["N"]:
+                rij = _zet_cel(rij, f"N{nr}", zet_cache(_cellen(rij)["N"], ""))
+                n_ = None
+            verslag.append(f"rij {nr} {naam}: NOG COMPEN" + (" (cm €1 gewist)" if NOG_COMPEN[nr] else ""))
+        if nr in CODE_FIX:
+            rij = _zet_cel(rij, f"B{nr}", tekst_cel(cellen.get("B"), f"B{nr}", CODE_FIX[nr]))
+            verslag.append(f"rij {nr} {naam}: code -> {CODE_FIX[nr]}")
+        if rij == origineel and (j, k) == (num0(inv.cell(nr, 10).value), num0(inv.cell(nr, 11).value)):
+            return rij
+        rij = _zet_cel(rij, f"J{nr}", getal_cel(cellen.get("J"), f"J{nr}", f"{j:g}"))
+        rij = _zet_cel(rij, f"K{nr}", getal_cel(cellen.get("K"), f"K{nr}", f"{k:g}"))
+        u = rijwaarden(j, k, m_, n_)
+        cellen2 = _cellen(rij)
+        for kol in "LOPQ":
+            rij = _zet_cel(rij, f"{kol}{nr}", zet_cache(cellen2[kol], u[kol]))
+        controleer(rij, cellen, nr)
+        return rij
+
+    xml = re.sub(r'<row\b[^>]*\br="(\d+)"[^>]*>.*?</row>', per_rij, xml, flags=re.S)
+    stukken[SHEET] = xml.encode("utf-8")
+    print("\n".join(verslag))
+
+    kol = kolom_data(inv)
+    for r in leeg:
+        for letter in KOLOMMEN:
+            kol[letter][r - 1] = None
+    for oud, (nieuw, extra, promo) in SAMENVOEGEN_ANTWOORDEN.items():
+        kol["J"][oud - 1] = kol["K"][oud - 1] = (kol["J"][oud - 1] or 0) + extra
+    kol["J"][EEVEE_BESTAAND - 1] = kol["K"][EEVEE_BESTAAND - 1] = 2
+    i = EEVEE_NIEUW - 1
+    kol["A"][i], kol["B"][i], kol["D"][i], kol["E"][i], kol["F"][i], kol["H"][i] = "Eevee", "SWSH087", "EN", "single", "Sealed", "NM"
+    kol["J"][i] = kol["K"][i] = 1; kol["M"][i], kol["N"][i] = 4, 6
+    for r, wis in NOG_COMPEN.items():
+        if wis:
+            kol["M"][r - 1] = None
+        kol["N"][r - 1] = None
+    herreken_dashboard(stukken, kol)
+    schrijf(stukken, doel)
+    print(f"geschreven: {doel}")
+
+
+# ---------------------------------------------------------------- analyse
+
+def analyse(doel: Path, event_id: int = 27):
+    """Weekendanalyse uit de database -> JSON-blokken voor de tab."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    import pandas as pd
+    from sqlalchemy import text
+    from db import get_engine
+    with get_engine().connect() as c:
+        aant = dict(c.execute(text("select bron_rij, aantal from items")).all())
+        tx = pd.read_sql(text("""select t.id,t.datum,t.tijd,t.type,t.bedrag::float as bedrag,t.item_id,t.stuks,
+            t.group_id,t.flag,t.ruwe_tekst,t.is_dubbel,t.onderhandeld,t.afgeboekt_op,t.opschoon_notitie,
+            i.onze_naam,i.code,i.categorie,i.comp_prijs::float as comp,i.prijs_cm::float as cm
+            from transactions t left join items i on i.id=t.item_id where t.event_id=:e"""), c, params={"e": event_id})
+    tx["datum"] = pd.to_datetime(tx["datum"]).dt.date
+    tx["groep"] = [g if isinstance(g, str) else f"tx-{i}" for g, i in zip(tx.group_id, tx.id)]
+    F = lambda x: round(float(x), 2)  # noqa: E731
+    DAG = {5: "za", 6: "zo", 0: "ma", 1: "di", 2: "wo", 3: "do", 4: "vr"}
+    echt = tx[~tx.is_dubbel]
+    blokken, rows = [], []
+    tot = dict(verkoop=0, vregels=0, afspraken=0, trades=0, cin=0, cbij=0)
+    for d, g in echt.groupby("datum"):
+        v, t = g[g.type == "verkoop"], g[g.type == "trade"]
+        w = dict(verkoop=v.bedrag.sum(), vregels=len(v), afspraken=v.groep.nunique(), trades=t.groep.nunique(),
+                 cin=t[t.bedrag > 0].bedrag.sum(), cbij=-t[t.bedrag < 0].bedrag.sum())
+        rows.append([f"{DAG[d.weekday()]} {d:%d-%m}", F(w["verkoop"]), int(w["vregels"]), int(w["afspraken"]),
+                     int(w["trades"]), F(w["cin"]), F(w["cbij"]), F(w["cin"] - w["cbij"])])
+        for k in tot:
+            tot[k] += w[k]
+    rows.append(["Weekend", F(tot["verkoop"]), int(tot["vregels"]), int(tot["afspraken"]), int(tot["trades"]),
+                 F(tot["cin"]), F(tot["cbij"]), F(tot["cin"] - tot["cbij"])])
+    blokken.append(["Omzet per dag (dubbelingen uitgesloten)", ["Dag", "Verkoop €", "Verkoopregels", "Verkoopafspraken",
+                    "Trades (afspraken)", "Cash in €", "Cash bijgelegd €", "Cash netto €"], rows])
+    v = echt[echt.type == "verkoop"]
+    top = v.groupby("groep").agg(bedrag=("bedrag", "sum"), datum=("datum", "first"), tijd=("tijd", "first"),
+                                 naam=("ruwe_tekst", lambda s: ", ".join(dict.fromkeys(s))), n=("id", "size")
+                                 ).sort_values("bedrag", ascending=False).head(10)
+    blokken.append(["Top 10 verkopen (per afspraak)", ["Omschrijving", "Bedrag €", "Dag", "Tijd", "Regels"],
+                    [[r.naam[:60], F(r.bedrag), r.datum.strftime("%d-%m"), str(r.tijd)[:5], int(r.n)] for r in top.itertuples()]])
+    cat = v.groupby(v.categorie.fillna("(niet gekoppeld)")).agg(bedrag=("bedrag", "sum"), regels=("id", "size"),
+                                                               stuks=("stuks", lambda s: s.fillna(1).sum())).sort_values("bedrag", ascending=False)
+    blokken.append(["Verkoop per categorie", ["Categorie", "Bedrag €", "Regels", "Stuks", "Aandeel"],
+                    [[k, F(r.bedrag), int(r.regels), int(r.stuks), f"{r.bedrag / v.bedrag.sum():.0%}"] for k, r in cat.iterrows()]])
+    k = v[v.comp.notna() & (v.comp > 0)].copy()
+    k["compw"] = k.comp * k.stuks.fillna(1)
+    ond, vol = k[k.onderhandeld], k[~k.onderhandeld]
+    blokken.append(["Korting t.o.v. comp-prijs (gekoppelde verkopen met comp)", ["", "Regels", "Verkocht €", "Comp-waarde €", "Korting"], [
+        ["Alle gekoppelde verkopen", len(k), F(k.bedrag.sum()), F(k.compw.sum()), f"{1 - k.bedrag.sum() / k.compw.sum():.1%}"],
+        ["Onderhandeld (prijs week af van comp)", len(ond), F(ond.bedrag.sum()), F(ond.compw.sum()), f"{1 - ond.bedrag.sum() / ond.compw.sum():.1%}"],
+        ["Tegen comp", len(vol), F(vol.bedrag.sum()), F(vol.compw.sum()), "0%"]]])
+    t = echt[echt.type == "trade"]
+    uit = t[t.item_id.notna()]
+    compuit = (uit.comp.fillna(uit.cm).fillna(0) * uit.stuks.fillna(1)).sum()
+    cmuit = (uit.cm.fillna(0) * uit.stuks.fillna(1)).sum()
+    cash = t[t.flag == "trade_cash"].bedrag.sum()
+    blokken.append(["Trade-balans", ["", "Waarde"], [
+        ["Trades (afspraken)", int(tot["trades"])], ["Kaarten eruit (stuks)", int(uit.stuks.fillna(1).sum())],
+        ["Comp-waarde eruit €", F(compuit)], ["cm-waarde eruit €", F(cmuit)], ["Cash netto ontvangen €", F(cash)],
+        ["Comp eruit minus cash in €", F(compuit - cash)],
+        ["Toelichting", "dat verschil is de waarde van wat er binnenkwam; die kaarten staan nu (ongeprijsd of gecompt) in de inventaris"]]])
+    rows = []
+    for d, g in v.groupby("datum"):
+        g = g.assign(uur=g.tijd.apply(lambda x: x.hour))
+        per = g.groupby("uur").agg(afspr=("groep", "nunique"), bedrag=("bedrag", "sum"))
+        bu, be = int(per.afspr.idxmax()), int(per.bedrag.idxmax())
+        rows.append([d.strftime("%d-%m"), f"{bu:02d}:00-{bu + 1:02d}:00", int(per.loc[bu, "afspr"]),
+                     f"{be:02d}:00-{be + 1:02d}:00", F(per.loc[be, "bedrag"])])
+    blokken.append(["Drukste uur per dag (verkoop)", ["Dag", "Meeste afspraken", "Afspraken", "Meeste omzet", "Omzet €"], rows])
+    dub = tx[tx.is_dubbel]
+    blokken.append(["Gemarkeerde dubbelingen (tellen niet mee)", ["#", "Dag", "Omschrijving", "Bedrag €", "Reden"],
+                    [[int(r.id), r.datum.strftime("%d-%m"), str(r.ruwe_tekst)[:40], F(r.bedrag), str(r.opschoon_notitie)[:100]]
+                     for r in dub.sort_values("id").itertuples()]])
+    fl = echt[echt.opschoon_notitie.fillna("").str.contains("flip|lotje|niet gekoppeld", case=False)]
+    blokken.append(["Flips en lotjes", ["#", "Dag", "Omschrijving", "Bedrag €", "Afhandeling"],
+                    [[int(r.id), r.datum.strftime("%d-%m"), str(r.ruwe_tekst)[:45], F(r.bedrag), str(r.opschoon_notitie)[:120]]
+                     for r in fl.sort_values("id").itertuples()]])
+    blokken.append(["Voorraadmutatie", ["", "Waarde"], [
+        ["Afgeboekte regels", int(tx.afgeboekt_op.notna().sum())],
+        ["Afgeboekte stuks", int(tx[tx.afgeboekt_op.notna()].stuks.fillna(1).sum())],
+        ["Omzet zonder voorraadmutatie €", F(echt[(echt.type == "verkoop") & echt.item_id.isna()].bedrag.sum())],
+        ["Items na het weekend", len(aant)], ["Stuks na het weekend", int(sum(aant.values()))]]])
+    mening = Path(__file__).resolve().parent.parent.parent / "data" / "weekend_rosmalen_mening.json"
+    if mening.exists():
+        blokken.append(["Eigen mening (data-gedreven)", [], json.loads(mening.read_text())])
+    doel.write_text(json.dumps(blokken, ensure_ascii=False, indent=1))
+    for b in blokken[:1]:
+        print(b[0]); [print("  ", r) for r in b[2]]
+    print(f"geschreven: {doel}")
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "opschonen":
         opschonen(Path(sys.argv[2]), Path(sys.argv[3]))
+    elif sys.argv[1] == "analyse":
+        analyse(Path(sys.argv[2]))
+    elif sys.argv[1] == "antwoorden":
+        antwoorden(Path(sys.argv[2]), Path(sys.argv[3]))
     elif sys.argv[1] == "terugschrijven":
         terugschrijven(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]), Path(sys.argv[5]))
     else:
