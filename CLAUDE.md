@@ -948,6 +948,15 @@ gerichte vervanging), laat de `<f>`-elementen staan en werk alleen de `<v>` bij.
 Let op dat sommige rijen in L, O, P en Q een **vaste waarde** hebben in plaats van een
 formule — behandel beide gevallen.
 
+- **`scripts/prijs_cm_uit_pulse.py`** (16-10-2026) — zet de Pulse-adviesprijzen in kolom M
+  van `Inventory TC.xlsx` op XML-niveau: `python scripts/prijs_cm_uit_pulse.py ADVIES.json
+  [--apply] [--skip NAAM[;CODE]] [--comp-override NAAM=BEDRAG] [--prijs NAAM=BEDRAG]`.
+  Zoekt rijen op naam+code+categorie (niet op `bron_rij`: de Windows-download schuift
+  t.o.v. de database), herrekent N (ladder), O, P en het Dashboard, back-up in
+  `data/backup/`, integriteitscheck vóór het vervangen. Boven €700 geeft de comp-ladder
+  "" — daar is `--comp-override` nodig. Eerste ronde 16-10: 25 rijen, zie pulse-repo
+  `docs/findings.md` (E4 s35).
+
 Kleinere valkuilen, allemaal een keer misgegaan:
 
 - **Item-id's verschuiven bij elke import** (de tabel wordt vervangen en hernummerd).
